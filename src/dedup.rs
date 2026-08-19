@@ -157,7 +157,7 @@ mod tests {
     #[test]
     fn mark_then_hit_and_idempotent_remark() {
         let s = DedupStore::open_in_memory().unwrap();
-        let a = agent("coding.main");
+        let a = agent("coding_main");
         assert!(!s.is_completed(&a, "e1").unwrap());
         s.mark_completed(&a, "e1").unwrap();
         assert!(s.is_completed(&a, "e1").unwrap());
@@ -171,8 +171,8 @@ mod tests {
     #[test]
     fn same_event_id_different_agents_do_not_collide() {
         let s = DedupStore::open_in_memory().unwrap();
-        let a = agent("coding.main");
-        let b = agent("assistant.personal");
+        let a = agent("coding_main");
+        let b = agent("assistant_personal");
         s.mark_completed(&a, "reused-id").unwrap();
         assert!(s.is_completed(&a, "reused-id").unwrap());
         assert!(
@@ -215,7 +215,7 @@ mod tests {
             let s = s.clone();
             handles.push(std::thread::spawn(move || {
                 for i in 0..100 {
-                    let a = agent("race.agent");
+                    let a = agent("race_agent");
                     s.mark_completed(&a, &format!("e-{t}-{i}")).unwrap();
                     assert!(s.is_completed(&a, &format!("e-{t}-{i}")).unwrap());
                 }

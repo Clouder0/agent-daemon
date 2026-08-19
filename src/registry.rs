@@ -443,17 +443,17 @@ mod tests {
 
     #[test]
     fn structural_validation_rejects_bad_configs() {
-        assert!(cfg("a.b", "/abs/handler", 1).validate().is_ok());
-        let relative_handler = cfg("a.b", "relative", 1);
+        assert!(cfg("a_b", "/abs/handler", 1).validate().is_ok());
+        let relative_handler = cfg("a_b", "relative", 1);
         assert!(relative_handler.validate().is_err());
         let zero = AgentConfig {
             max_concurrency: 0,
-            ..cfg("a.b", "/abs", 1)
+            ..cfg("a_b", "/abs", 1)
         };
         assert!(zero.validate().is_err());
         let bad_cwd = AgentConfig {
             working_directory: Some(PathBuf::from("relative")),
-            ..cfg("a.b", "/abs", 1)
+            ..cfg("a_b", "/abs", 1)
         };
         assert!(bad_cwd.validate().is_err());
     }
@@ -462,13 +462,13 @@ mod tests {
     fn register_persists_and_reload_roundtrips() {
         let dir = temp_dir("roundtrip");
         let r = Registry::load(&dir).unwrap();
-        r.register(&cfg("coding.main", "/bin/true", 1)).unwrap();
-        let file = dir.join("coding.main.toml");
+        r.register(&cfg("coding_main", "/bin/true", 1)).unwrap();
+        let file = dir.join("coding_main.toml");
         assert!(file.exists());
         // A fresh load sees the same config.
         let r2 = Registry::load(&dir).unwrap();
         assert_eq!(r2.snapshot().len(), 1);
-        assert_eq!(r2.snapshot()[0].agent_id.as_str(), "coding.main");
+        assert_eq!(r2.snapshot()[0].agent_id.as_str(), "coding_main");
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -476,8 +476,8 @@ mod tests {
     fn duplicate_register_is_an_error() {
         let dir = temp_dir("dup");
         let r = Registry::load(&dir).unwrap();
-        r.register(&cfg("a.b", "/bin/true", 1)).unwrap();
-        assert!(r.register(&cfg("a.b", "/bin/false", 2)).is_err());
+        r.register(&cfg("a_b", "/bin/true", 1)).unwrap();
+        assert!(r.register(&cfg("a_b", "/bin/false", 2)).is_err());
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -491,7 +491,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join("wrong.toml"),
-            toml_string(&cfg("a.b", "/bin/true", 1)),
+            toml_string(&cfg("a_b", "/bin/true", 1)),
         )
         .unwrap();
         assert!(Registry::load(&dir).is_err());
@@ -537,15 +537,15 @@ mod tests {
     fn update_and_unregister_flow() {
         let dir = temp_dir("flow");
         let r = Registry::load(&dir).unwrap();
-        r.register(&cfg("a.b", "/bin/a", 1)).unwrap();
-        r.update(&cfg("a.b", "/bin/a2", 2)).unwrap();
+        r.register(&cfg("a_b", "/bin/a", 1)).unwrap();
+        r.update(&cfg("a_b", "/bin/a2", 2)).unwrap();
         assert_eq!(r.snapshot()[0].handler, PathBuf::from("/bin/a2"));
-        r.set_enabled(&AgentId::parse("a.b").unwrap(), false)
+        r.set_enabled(&AgentId::parse("a_b").unwrap(), false)
             .unwrap();
         assert!(!r.snapshot()[0].enabled);
-        r.unregister(&AgentId::parse("a.b").unwrap()).unwrap();
+        r.unregister(&AgentId::parse("a_b").unwrap()).unwrap();
         assert!(r.snapshot().is_empty());
-        assert!(!dir.join("a.b.toml").exists());
+        assert!(!dir.join("a_b.toml").exists());
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -559,8 +559,8 @@ mod tests {
         let r = Arc::new(Registry::load(&dir).unwrap());
         let r1 = r.clone();
         let r2 = r.clone();
-        let t1 = std::thread::spawn(move || r1.register(&cfg("race.id", "/bin/h1", 1)));
-        let t2 = std::thread::spawn(move || r2.register(&cfg("race.id", "/bin/h2", 1)));
+        let t1 = std::thread::spawn(move || r1.register(&cfg("race_id", "/bin/h1", 1)));
+        let t2 = std::thread::spawn(move || r2.register(&cfg("race_id", "/bin/h2", 1)));
         let (a, b) = (t1.join().unwrap(), t2.join().unwrap());
         // Exactly one register wins; the other reports already-registered.
         assert_eq!(
@@ -572,7 +572,7 @@ mod tests {
         let mem = r.snapshot();
         assert_eq!(mem.len(), 1);
         let disk: AgentConfig =
-            toml::from_str(&std::fs::read_to_string(dir.join("race.id.toml")).unwrap()).unwrap();
+            toml::from_str(&std::fs::read_to_string(dir.join("race_id.toml")).unwrap()).unwrap();
         assert_eq!(mem[0].handler, disk.handler, "disk and memory diverged");
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -598,7 +598,7 @@ mod tests {
     #[test]
     fn liveness_warnings_classify_handlers() {
         // Missing handler.
-        let missing = cfg("a.b", "/nonexistent/handler", 1);
+        let missing = cfg("a_b", "/nonexistent/handler", 1);
         assert_eq!(missing.liveness_warnings().len(), 1);
         assert!(missing.liveness_warnings()[0].contains("does not exist"));
 
@@ -610,7 +610,7 @@ mod tests {
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o644)).unwrap();
         let not_exec = AgentConfig {
             handler: script.clone(),
-            ..cfg("a.b", "/bin/true", 1)
+            ..cfg("a_b", "/bin/true", 1)
         };
         assert_eq!(not_exec.liveness_warnings().len(), 1);
         assert!(not_exec.liveness_warnings()[0].contains("not executable"));
@@ -619,7 +619,7 @@ mod tests {
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
         let exec = AgentConfig {
             handler: script,
-            ..cfg("a.b", "/bin/true", 1)
+            ..cfg("a_b", "/bin/true", 1)
         };
         assert!(exec.liveness_warnings().is_empty());
         std::fs::remove_dir_all(&dir).ok();

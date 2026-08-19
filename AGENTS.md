@@ -1,6 +1,6 @@
 # AGENTS.md — agent-daemon
 
-`agent-daemon` (binary: `agentd`) is a per-machine daemon for Agent Native Domains: it receives events addressed to locally registered Agents from a self-hosted NATS JetStream relay and turns each event into exactly one local executable invocation — the Handler receives the original event JSON on stdin. It is mechanism only: no agent loop, no context, no retries, no policy. An `agent_id` (dot-separated, e.g. `coding.main`) is a routing name decoupled from process liveness.
+`agent-daemon` (binary: `agentd`) is a per-machine daemon for Agent Native Domains: it receives events addressed to locally registered Agents from a self-hosted NATS JetStream relay and turns each event into exactly one local executable invocation — the Handler receives the original event JSON on stdin. It is mechanism only: no agent loop, no context, no retries, no policy. An `agent_id` (dot-separated, e.g. `coding_main`) is a routing name decoupled from process liveness.
 
 This file is a routing table, not a knowledge base — every line here is paid for on every turn. Point, don't inline.
 

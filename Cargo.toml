@@ -25,6 +25,8 @@ thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "sync", "signal", "time", "net", "io-util"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+async-nats = "0.50.0"
+futures-util = "0.3.34"
 
 # Landing with the issue that first uses it: async-nats.
 

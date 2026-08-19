@@ -107,11 +107,11 @@ Personal Domain
 ├── Self-hosted NATS JetStream
 ├── Desktop A
 │   └── agentd
-│       ├── coding.main
-│       └── assistant.personal
+│       ├── coding_main
+│       └── assistant_personal
 └── Server B
     └── agentd
-        └── research.main
+        └── research_main
 ```
 
 一个 `agentd` 可以承载多个 Agent。
@@ -164,9 +164,9 @@ Core NATS 只向当前在线的 Subscriber 投递消息，而 JetStream 增加�
 例如：
 
 ```text
-coding.main
-assistant.personal
-research.market
+coding_main
+assistant_personal
+research_market
 ```
 
 它不是：
@@ -184,15 +184,15 @@ research.market
 v0 约束：
 
 ```text
-agent_id := segment ("/" segment)*
-segment  := [a-z0-9][a-z0-9_-]{0,62}
+agent_id := token ("_" token)*
+token    := [a-z0-9][a-z0-9-]{0,62}
 ```
 
-`.` 不允许出现在 Segment 中，因此可以安全映射到 NATS Subject：
+`_` 是 id 的分隔符且不允许出现在 token 内，因此 id（单个 NATS token）、filter subject、consumer 名称与配置文件名都是同一个 `_` 形式——所有映射均为恒等（ADR-0006）：
 
 ```text
-coding.main
-→ agent.events.coding.main
+coding_main
+→ agent.events.coding_main
 ```
 
 ---
@@ -450,11 +450,11 @@ agent.events.<encoded-agent-id>
 编码规则：
 
 ```text
-coding.main
-→ agent.events.coding.main
+coding_main
+→ agent.events.coding_main
 
-assistant.personal
-→ agent.events.assistant.personal
+assistant_personal
+→ agent.events.assistant_personal
 ```
 
 `agentd` 不订阅一个全局 `agent.events.>` 然后自行过滤。
@@ -471,10 +471,10 @@ assistant.personal
 
 ```text
 Agent ID:
-    coding.main
+    coding_main
 
 Filter Subject:
-    agent.events.coding.main
+    agent.events.coding_main
 
 Durable Consumer:
     agent-<stable-hash-of-agent-id>
@@ -562,7 +562,7 @@ v0 不要求实现这种细粒度限制。
 {
   "version": 1,
   "event_id": "01J6ZP8R5EF4Y42KABCD123456",
-  "agent_id": "coding.main",
+  "agent_id": "coding_main",
   "type": "im.message",
   "created_at": "2026-08-19T12:00:00Z",
   "payload": {
@@ -687,9 +687,9 @@ Daemon 自身的配置（v0.1）持久化在 `$XDG_CONFIG_HOME/agentd/agentd.tom
 
 ```text
 agentd
-├── coding.main
-├── assistant.personal
-└── research.market
+├── coding_main
+├── assistant_personal
+└── research_market
 ```
 
 每个 Agent 注册：
@@ -703,7 +703,7 @@ agentd
 示例配置：
 
 ```toml
-agent_id = "coding.main"
+agent_id = "coding_main"
 handler = "/home/clouder/agents/coding-main/on-event"
 max_concurrency = 1
 working_directory = "/home/clouder/projects/main"
@@ -775,15 +775,15 @@ reload
 
 ```bash
 agentdctl register \
-  --id coding.main \
+  --id coding_main \
   --handler /home/clouder/agents/coding-main/on-event \
   --max-concurrency 1 \
   --cwd /home/clouder/projects/main
 
-agentdctl update coding.main \
+agentdctl update coding_main \
   --handler /home/clouder/agents/coding-main-v2/on-event
 
-agentdctl unregister coding.main
+agentdctl unregister coding_main
 
 agentdctl list
 
@@ -804,12 +804,12 @@ $XDG_CONFIG_HOME/agentd/agents.d/
 
 ```text
 agents.d/
-├── coding-main.toml
-├── assistant-personal.toml
-└── research-market.toml
+├── coding_main.toml
+├── assistant_personal.toml
+└── research_market.toml
 ```
 
-v0.1: `/`→`-` 的文件名映射不是单射（`a/b-c` 与 `a-b/c` 都得到 `a-b-c.toml`），因此唯一性以文件内容中的 `agent_id` 为准：加载时检测到重复 `agent_id` 即报错，文件名仅是显示约定。
+（v0.1/ADR-0006）文件名即 agent id 本身（`<agent_id>.toml`，`_` 形式）；唯一性以文件内容中的 `agent_id` 为准，且文件名必须与之匹配。
 
 更新必须采用：
 
@@ -873,7 +873,7 @@ stdin：
 {
   "version": 1,
   "event_id": "...",
-  "agent_id": "coding.main",
+  "agent_id": "coding_main",
   "type": "im.message",
   "created_at": "...",
   "payload": {},
@@ -1694,7 +1694,7 @@ Control Socket 可以采用每行一个 JSON Request / Response。
 {
   "op": "register",
   "agent": {
-    "agent_id": "coding.main",
+    "agent_id": "coding_main",
     "handler": "/home/clouder/agents/coding-main/on-event",
     "max_concurrency": 1,
     "working_directory": "/home/clouder/projects/main",
@@ -1714,7 +1714,7 @@ Control Socket 可以采用每行一个 JSON Request / Response。
 其他请求：
 
 ```json
-{"op": "unregister", "agent_id": "coding.main"}
+{"op": "unregister", "agent_id": "coding_main"}
 ```
 
 ```json
@@ -1815,7 +1815,7 @@ if __name__ == "__main__":
 
 ```bash
 agentdctl register \
-  --id coding.main \
+  --id coding_main \
   --handler /home/clouder/agents/coding-main/on-event \
   --max-concurrency 1 \
   --cwd /home/clouder/projects/main
@@ -1825,7 +1825,7 @@ agentdctl register \
 
 1. 保存配置；
 2. 创建或绑定 Durable Consumer；
-3. 开始 Pull `agent.events.coding.main`。
+3. 开始 Pull `agent.events.coding_main`。
 
 ---
 
@@ -1834,7 +1834,7 @@ agentdctl register \
 IM Adapter 向：
 
 ```text
-agent.events.coding.main
+agent.events.coding_main
 ```
 
 发布：
@@ -1843,7 +1843,7 @@ agent.events.coding.main
 {
   "version": 1,
   "event_id": "01J6ZP8R5EF4Y42KABCD123456",
-  "agent_id": "coding.main",
+  "agent_id": "coding_main",
   "type": "im.message",
   "created_at": "2026-08-19T12:00:00Z",
   "payload": {
