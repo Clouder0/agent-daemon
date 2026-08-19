@@ -231,6 +231,7 @@ async fn status_reports_agents_and_backlog() {
     let r = f.rpc(Request::Status).await;
     assert!(r.ok);
     let status = r.status.unwrap();
+    assert_eq!(status.daemon_version, env!("CARGO_PKG_VERSION"));
     assert!(status.nats_connected);
     assert_eq!(status.agents.len(), 1);
     let a = &status.agents[0];

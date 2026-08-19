@@ -124,6 +124,8 @@ pub struct AgentStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatusReport {
+    /// Daemon version (agents use this for feature detection).
+    pub daemon_version: String,
     pub nats_connected: bool,
     pub agents: Vec<AgentStatus>,
 }
@@ -281,6 +283,7 @@ async fn handle_request<A: RelayBackend + 'static>(
                 error: None,
                 agents: None,
                 status: Some(StatusReport {
+                    daemon_version: env!("CARGO_PKG_VERSION").to_string(),
                     nats_connected: handle.nats_connected.load(Ordering::Relaxed),
                     agents,
                 }),

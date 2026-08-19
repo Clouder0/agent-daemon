@@ -7,6 +7,7 @@ This file is a routing table, not a knowledge base — every line here is paid f
 | Context | Home |
 |---|---|
 | Semantics (source of truth) | `docs/whitepaper-v0.md` — if code and whitepaper disagree, the whitepaper wins until amended by PR |
+| User-facing docs | `docs/agent-guide.md` (for Agents), `docs/ops-guide.md` (for humans), `docs/envelope.schema.json` |
 | Permanent decisions and rationale | `docs/adr/NNN-*.md` |
 | Per-issue working context | `specs/<N>-<slug>/` (spec / plan / tasks) |
 | Original Chinese whitepaper | `docs/whitepaper-v0.zh.md` (reference copy, not SoT) |
