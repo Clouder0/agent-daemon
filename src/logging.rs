@@ -28,8 +28,9 @@ pub fn init(config: &DaemonConfig) -> Result<(), AgentdError> {
     Ok(())
 }
 
-/// Build the log filter. Pure and unit-testable: `init` only contributes the
-/// environment lookup.
+/// Build the log filter. Isolated from global subscriber state, so it is
+/// unit-testable — but not pure: an invalid env filter prints a warning to
+/// stderr before falling back to the configured level.
 pub(crate) fn build_filter(
     env: Option<&str>,
     config_level: &str,
@@ -42,6 +43,27 @@ pub(crate) fn build_filter(
     }
     EnvFilter::try_new(config_level)
         .map_err(|e| AgentdError::config(format!("invalid log_level filter {config_level:?}: {e}")))
+}
+
+/// Redact any `user:pass@` userinfo so URLs with embedded credentials can
+/// never reach the log output (§12.2). Credential-bearing URLs should not be
+/// used with `agentd` at all — this is defense in depth for the log surface.
+pub(crate) fn redact_url(url: &str) -> String {
+    let Some(scheme_end) = url.find("://") else {
+        return url.to_owned();
+    };
+    let authority_start = scheme_end + 3;
+    let authority_end = url[authority_start..]
+        .find('/')
+        .map_or(url.len(), |i| authority_start + i);
+    let Some(at) = url[authority_start..authority_end].rfind('@') else {
+        return url.to_owned();
+    };
+    let mut redacted = String::with_capacity(url.len());
+    redacted.push_str(&url[..authority_start]);
+    redacted.push_str("***");
+    redacted.push_str(&url[authority_start + at..]);
+    redacted
 }
 
 /// The per-dispatch span: every event emitted while entered inherits the
@@ -61,6 +83,13 @@ pub fn dispatch_span(
     )
 }
 
+/// The per-handler span: the dispatcher keeps it entered for the handler's
+/// entire lifetime so spawn/exit events correlate `handler_path` and
+/// `handler_pid` on every line (§16), even under concurrent dispatch.
+pub fn handler_span(handler_path: &str, handler_pid: u32) -> tracing::Span {
+    tracing::info_span!("handler", handler_path, handler_pid)
+}
+
 /// One helper per whitepaper §16 must-log event. Emission is wired by the
 /// modules that own each lifecycle (#2 relay, #5 registry, #3 dispatcher).
 pub mod events {
@@ -68,7 +97,7 @@ pub mod events {
 
     // Relay lifecycle (#2).
     pub fn nats_connected(url: &str) {
-        tracing::info!(nats_url = url, "nats connected");
+        tracing::info!(nats_url = %super::redact_url(url), "nats connected");
     }
 
     pub fn nats_disconnected() {
@@ -278,6 +307,44 @@ mod tests {
             lines[0].contains("exit_status=0") && lines[0].contains("duration_ms=214"),
             "event fields missing: {lines:?}"
         );
+    }
+
+    #[test]
+    fn urls_with_userinfo_are_redacted() {
+        assert_eq!(
+            redact_url("nats://user:pass@relay.internal:4222"),
+            "nats://***@relay.internal:4222"
+        );
+        assert_eq!(
+            redact_url("nats://user:p@ss@relay:4222/js?query"),
+            "nats://***@relay:4222/js?query"
+        );
+        assert_eq!(
+            redact_url("nats://relay.internal:4222"),
+            "nats://relay.internal:4222"
+        );
+        assert_eq!(redact_url("relay.internal:4222"), "relay.internal:4222");
+    }
+
+    #[test]
+    fn handler_span_fields_attach_to_nested_events() {
+        let capture = Capture::default();
+        let dispatch = tracing::Dispatch::new(tracing_subscriber::registry().with(capture.clone()));
+        tracing::dispatcher::with_default(&dispatch, || {
+            let agent = AgentId::parse("coding/main").unwrap();
+            let dispatch = dispatch_span(&agent, "ev-9", "agent-abc", 7);
+            let _dispatch_guard = dispatch.enter();
+            let handler = handler_span("/bin/on-event", 99);
+            let _handler_guard = handler.enter();
+            events::handler_exited(0, 5);
+        });
+        let lines = &capture.0.lock().unwrap().events;
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(
+            lines[0].contains("handler[handler_path=/bin/on-event,handler_pid=99]"),
+            "handler span fields missing: {lines:?}"
+        );
+        assert!(lines[0].contains("exit_status=0"), "{lines:?}");
     }
 
     #[test]
