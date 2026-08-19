@@ -30,9 +30,17 @@ enum Command {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
-        Command::Run => {
-            eprintln!("agentd: daemon core not yet implemented (scaffold)");
-            ExitCode::FAILURE
-        }
+        Command::Run => run(),
     }
+}
+
+fn run() -> ExitCode {
+    // Config-file loading lands with #5; defaults keep logging sane for now.
+    let config = agent_daemon::config::DaemonConfig::default();
+    if let Err(e) = agent_daemon::logging::init(&config) {
+        eprintln!("agentd: {e}");
+        return ExitCode::FAILURE;
+    }
+    tracing::warn!("daemon core not yet implemented (see issues #2-#6)");
+    ExitCode::FAILURE
 }
