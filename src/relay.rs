@@ -27,6 +27,10 @@ use crate::registry::{Change, Registry};
 /// re-read free slots.
 const FETCH_EXPIRES: Duration = Duration::from_secs(30);
 
+/// Client-side cap on any single fetch request or message wait (see
+/// `pull_loop`): bounds post-reconnect recovery.
+const FETCH_CAP: Duration = Duration::from_secs(10);
+
 /// Idle sleep when no dispatch slots are free: a freed slot is noticed
 /// within ~1s without coupling the relay to the dispatcher.
 const NO_SLOT_SLEEP: Duration = Duration::from_secs(1);
@@ -81,7 +85,8 @@ pub fn jetstream_context(client: &async_nats::Client) -> Context {
 
 /// Connect to the relay with credentials when configured (§3.4). Initial
 /// connect retries so the daemon survives a relay that is not up yet
-/// (§15.1).
+/// (§15.1). Connection lifecycle events (disconnect/reconnect) are logged
+/// per §16.
 pub async fn connect(config: &DaemonConfig) -> Result<async_nats::Client, AgentdError> {
     let options = match &config.nats_creds {
         Some(creds) => async_nats::ConnectOptions::with_credentials_file(creds.clone())
@@ -91,12 +96,30 @@ pub async fn connect(config: &DaemonConfig) -> Result<async_nats::Client, Agentd
             })?,
         None => async_nats::ConnectOptions::new(),
     };
+    tracing::info!(
+        nats_url = %crate::logging::redact_url(&config.nats_url),
+        "connecting to relay (retrying until reachable)"
+    );
+    let event_url = config.nats_url.clone();
+    let options = options.event_callback(move |event| {
+        let url = event_url.clone();
+        async move {
+            match event {
+                // Reconnects surface as a fresh `Connected`.
+                async_nats::Event::Connected => events::nats_connected(&url),
+                async_nats::Event::Disconnected => events::nats_disconnected(),
+                async_nats::Event::LameDuckMode => {
+                    tracing::warn!("relay entered lame duck mode")
+                }
+                other => tracing::debug!("nats connection event: {other:?}"),
+            }
+        }
+    });
     let client = options
         .retry_on_initial_connect()
         .connect(&config.nats_url)
         .await
         .map_err(|e| AgentdError::config(format!("cannot connect to {}: {e}", config.nats_url)))?;
-    events::nats_connected(&config.nats_url);
     Ok(client)
 }
 
@@ -193,11 +216,16 @@ impl Relay {
                 Change::Updated(_) => {
                     // Rebind in case concurrency (MaxAckPending) changed.
                     self.stop_pull(&id);
-                    if let Some(c) = self.registry.get(&id)
-                        && c.enabled
-                        && let Ok(consumer) = self.bind_consumer(&id, c.max_concurrency).await
-                    {
-                        self.start_pull(id.clone(), consumer);
+                    match self.registry.get(&id) {
+                        Some(c) if c.enabled => {
+                            match self.bind_consumer(&id, c.max_concurrency).await {
+                                Ok(consumer) => self.start_pull(id.clone(), consumer),
+                                Err(e) => {
+                                    tracing::error!(agent_id = %id, "consumer rebind failed; agent not consumed until next reload: {e}")
+                                }
+                            }
+                        }
+                        _ => {}
                     }
                     events::agent_updated(&id);
                 }
@@ -270,6 +298,12 @@ impl Relay {
 
 /// Slot-driven pull loop (§8.1 step 4): fetch at most the dispatcher's free
 /// slots; sleep briefly when none are free.
+///
+/// Every fetch request and message wait is capped client-side by
+/// `FETCH_CAP`: a request whose connection died mid-flight would otherwise
+/// stall this loop until the *server-side* expiry (up to 30s of no pulling
+/// after a relay reconnect — observed in the review smoke). With the cap,
+/// recovery from any outage is bounded to ~`FETCH_CAP`.
 async fn pull_loop(
     consumer: PullConsumer,
     agent: AgentId,
@@ -283,26 +317,39 @@ async fn pull_loop(
             tokio::time::sleep(NO_SLOT_SLEEP).await;
             continue;
         }
-        let mut messages = match consumer
-            .batch()
-            .max_messages(free.max(1))
-            .expires(FETCH_EXPIRES)
-            .messages()
-            .await
-        {
-            Ok(messages) => messages,
-            Err(e) => {
-                tracing::warn!(agent_id = %agent, "fetch failed: {e}");
-                tokio::time::sleep(NO_SLOT_SLEEP).await;
-                continue;
+        let mut messages = {
+            let fetch = consumer
+                .batch()
+                .max_messages(free.max(1))
+                .expires(FETCH_EXPIRES)
+                .messages();
+            match tokio::time::timeout(FETCH_CAP, fetch).await {
+                Ok(Ok(messages)) => messages,
+                Ok(Err(e)) => {
+                    tracing::warn!(agent_id = %agent, "fetch failed: {e}");
+                    tokio::time::sleep(NO_SLOT_SLEEP).await;
+                    continue;
+                }
+                Err(_) => {
+                    tracing::debug!(agent_id = %agent, "fetch request stalled; re-issuing");
+                    continue;
+                }
             }
         };
-        while let Some(item) = messages.next().await {
+        loop {
+            let item = match tokio::time::timeout(FETCH_CAP, messages.next()).await {
+                Ok(Some(item)) => item,
+                Ok(None) => break, // stream ended (expiry) → re-fetch
+                Err(_) => {
+                    tracing::debug!(agent_id = %agent, "pull stream stalled; re-issuing");
+                    break;
+                }
+            };
             let message = match item {
                 Ok(m) => m,
                 Err(e) => {
                     tracing::warn!(agent_id = %agent, "message fetch error: {e}");
-                    continue;
+                    break;
                 }
             };
             let info = match message.info() {
