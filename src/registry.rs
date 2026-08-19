@@ -13,8 +13,9 @@
 //! to stop the daemon.
 
 use std::collections::{HashMap, HashSet};
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::RwLock;
+use std::sync::{Mutex, RwLock};
 
 use serde::{Deserialize, Serialize};
 
@@ -126,11 +127,15 @@ impl Change {
     }
 }
 
-/// The registry. Cheap reads (snapshot/get) under a read lock; mutations
-/// persist to disk then update memory under a write lock.
+/// The registry. Reads (get/snapshot) are concurrent on the read lock;
+/// mutations are serialized by a single mutex so the existence check, disk
+/// write, and in-memory insert are atomic (a concurrent same-id register
+/// must not leave disk and memory diverged). Mutations are rare, so the
+/// mutex never contends with the dispatch-path readers.
 pub struct Registry {
     dir: PathBuf,
     inner: RwLock<RegistryInner>,
+    mutation: Mutex<()>,
 }
 
 struct RegistryInner {
@@ -147,6 +152,7 @@ impl Registry {
             return Ok(Self {
                 dir: dir.to_owned(),
                 inner: RwLock::new(RegistryInner { agents }),
+                mutation: Mutex::new(()),
             });
         }
         for entry in std::fs::read_dir(dir)
@@ -180,6 +186,7 @@ impl Registry {
         Ok(Self {
             dir: dir.to_owned(),
             inner: RwLock::new(RegistryInner { agents }),
+            mutation: Mutex::new(()),
         })
     }
 
@@ -204,11 +211,16 @@ impl Registry {
     /// Register a new agent: validate, persist (atomic write), then mutate
     /// in-memory state. Errors if the agent already exists.
     ///
-    /// The disk write happens outside any lock so slow filesystem I/O never
-    /// blocks readers on the dispatch path; the write lock is held only for
-    /// the cheap existence check and in-memory insert.
+    /// The whole check → write → insert runs under the mutation mutex so a
+    /// concurrent same-id register cannot leave disk and memory diverged.
+    /// The mutex serializes mutations only; reads (get/snapshot) stay
+    /// concurrent on the read lock and are never blocked by disk I/O.
     pub fn register(&self, config: &AgentConfig) -> Result<(), AgentdError> {
         config.validate()?;
+        let _guard = self
+            .mutation
+            .lock()
+            .expect("registry mutation lock poisoned");
         if self.get(&config.agent_id).is_some() {
             return Err(AgentdError::config(format!(
                 "agent {} already registered",
@@ -217,14 +229,6 @@ impl Registry {
         }
         self.persist(config)?; // on failure, in-memory state is unchanged
         let mut inner = self.inner.write().expect("registry lock poisoned");
-        if inner.agents.contains_key(&config.agent_id) {
-            // Lost a race with another writer; the file is already written
-            // with this agent's config, which is what it would contain anyway.
-            return Err(AgentdError::config(format!(
-                "agent {} already registered",
-                config.agent_id
-            )));
-        }
         inner.agents.insert(config.agent_id.clone(), config.clone());
         Ok(())
     }
@@ -232,6 +236,10 @@ impl Registry {
     /// Replace an existing agent's config. Errors if absent.
     pub fn update(&self, config: &AgentConfig) -> Result<(), AgentdError> {
         config.validate()?;
+        let _guard = self
+            .mutation
+            .lock()
+            .expect("registry mutation lock poisoned");
         if self.get(&config.agent_id).is_none() {
             return Err(AgentdError::config(format!(
                 "agent {} is not registered",
@@ -247,6 +255,10 @@ impl Registry {
     /// Toggle `enabled`, persisting the change. A disabled agent stops
     /// pulling new events (§7.4); the file is kept.
     pub fn set_enabled(&self, id: &AgentId, enabled: bool) -> Result<(), AgentdError> {
+        let _guard = self
+            .mutation
+            .lock()
+            .expect("registry mutation lock poisoned");
         let Some(existing) = self.get(id) else {
             return Err(AgentdError::config(format!("agent {id} is not registered")));
         };
@@ -265,6 +277,10 @@ impl Registry {
     /// is the source of truth, so this is atomic-enough (missing file =
     /// unregistered after restart). On failure in-memory is unchanged.
     pub fn unregister(&self, id: &AgentId) -> Result<(), AgentdError> {
+        let _guard = self
+            .mutation
+            .lock()
+            .expect("registry mutation lock poisoned");
         if self.get(id).is_none() {
             return Err(AgentdError::config(format!("agent {id} is not registered")));
         }
@@ -282,6 +298,10 @@ impl Registry {
     /// Re-read the directory and return the diff against current state
     /// (whitepaper §7.4). Consumers (#2/#3) subscribe to the changes.
     pub fn reload(&self) -> Result<Vec<Change>, AgentdError> {
+        let _guard = self
+            .mutation
+            .lock()
+            .expect("registry mutation lock poisoned");
         let fresh = Self::load(&self.dir)?;
         let mut old = self.inner.write().expect("registry lock poisoned");
         let new_map = fresh.inner.read().expect("poisoned").agents.clone();
@@ -333,11 +353,16 @@ impl Registry {
         let tmp_path = self
             .dir
             .join(format!(".{}.{}.tmp", config.agent_id, std::process::id()));
-        std::fs::write(&tmp_path, content.as_bytes()).map_err(|e| {
+        // Write and fsync the same handle so the rename is durable.
+        let mut file = std::fs::File::create(&tmp_path).map_err(|e| {
+            AgentdError::config(format!("cannot create {}: {e}", tmp_path.display()))
+        })?;
+        file.write_all(content.as_bytes()).map_err(|e| {
             AgentdError::config(format!("cannot write {}: {e}", tmp_path.display()))
         })?;
-        // fsync the file so the rename is durable.
-        sync_file(&tmp_path)?;
+        file.sync_all().map_err(|e| {
+            AgentdError::config(format!("fsync failed for {}: {e}", tmp_path.display()))
+        })?;
         std::fs::rename(&tmp_path, &final_path).map_err(|e| {
             AgentdError::config(format!(
                 "cannot rename {} -> {}: {e}",
@@ -352,20 +377,6 @@ impl Registry {
         }
         Ok(())
     }
-}
-
-/// Open the temp file read-write (some filesystems need write access for a
-/// meaningful `sync_all`) and fsync it before the atomic rename.
-fn sync_file(path: &Path) -> Result<(), AgentdError> {
-    let file = std::fs::File::options()
-        .read(true)
-        .write(true)
-        .open(path)
-        .map_err(|e| {
-            AgentdError::config(format!("cannot open {} for fsync: {e}", path.display()))
-        })?;
-    file.sync_all()
-        .map_err(|e| AgentdError::config(format!("fsync failed for {}: {e}", path.display())))
 }
 
 /// Parse and structurally validate a single `agents.d` file.
@@ -512,6 +523,34 @@ mod tests {
         r.unregister(&AgentId::parse("a.b").unwrap()).unwrap();
         assert!(r.snapshot().is_empty());
         assert!(!dir.join("a.b.toml").exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Regression: concurrent same-id registers must never leave disk and
+    /// memory diverged (the pre-fix TOCTOU let both threads pass the
+    /// existence check and write different handlers).
+    #[test]
+    fn concurrent_same_id_register_keeps_disk_and_memory_consistent() {
+        use std::sync::Arc;
+        let dir = temp_dir("race");
+        let r = Arc::new(Registry::load(&dir).unwrap());
+        let r1 = r.clone();
+        let r2 = r.clone();
+        let t1 = std::thread::spawn(move || r1.register(&cfg("race.id", "/bin/h1", 1)));
+        let t2 = std::thread::spawn(move || r2.register(&cfg("race.id", "/bin/h2", 1)));
+        let (a, b) = (t1.join().unwrap(), t2.join().unwrap());
+        // Exactly one register wins; the other reports already-registered.
+        assert_eq!(
+            (a.is_ok() as u8) + (b.is_ok() as u8),
+            1,
+            "exactly one concurrent register should succeed: {a:?} {b:?}"
+        );
+        // Disk and memory must agree.
+        let mem = r.snapshot();
+        assert_eq!(mem.len(), 1);
+        let disk: AgentConfig =
+            toml::from_str(&std::fs::read_to_string(dir.join("race.id.toml")).unwrap()).unwrap();
+        assert_eq!(mem[0].handler, disk.handler, "disk and memory diverged");
         std::fs::remove_dir_all(&dir).ok();
     }
 }

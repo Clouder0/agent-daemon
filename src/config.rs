@@ -29,6 +29,9 @@ pub struct DaemonConfig {
     pub control_socket: Option<std::path::PathBuf>,
     /// Dedup store path; defaults under the XDG data dir when unset.
     pub dedup_path: Option<std::path::PathBuf>,
+    /// Maximum accepted event size in bytes (whitepaper §5.1 default 256 KiB,
+    /// §15.2 terminal). Enforced where the relay hands the dispatcher bytes.
+    pub max_event_bytes: u64,
     /// Completed-event retention. Should exceed the Stream `MaxAge`
     /// (whitepaper §10.2; Stream default 7 days).
     pub dedup_ttl_days: u64,
@@ -52,6 +55,7 @@ impl Default for DaemonConfig {
             agents_dir: None,
             control_socket: None,
             dedup_path: None,
+            max_event_bytes: 256 * 1024,
             dedup_ttl_days: 14,
             ack_wait_secs: 300,
             ack_progress_interval_secs: 90,
@@ -76,6 +80,9 @@ impl DaemonConfig {
     fn validate(&self) -> Result<(), AgentdError> {
         if self.dedup_ttl_days == 0 {
             return Err(AgentdError::config("dedup_ttl_days must be > 0".into()));
+        }
+        if self.max_event_bytes == 0 {
+            return Err(AgentdError::config("max_event_bytes must be > 0".into()));
         }
         if self.ack_progress_interval_secs >= self.ack_wait_secs {
             return Err(AgentdError::config(
@@ -107,6 +114,7 @@ mod tests {
         assert_eq!(c.ack_wait_secs, 300);
         assert_eq!(c.ack_progress_interval_secs, 90);
         assert_eq!(c.slow_handler_warn_secs, 3600);
+        assert_eq!(c.max_event_bytes, 256 * 1024, "whitepaper §5.1 default");
         assert!(c.dedup_ttl_days > 7, "dedup retention must exceed MaxAge");
     }
 
