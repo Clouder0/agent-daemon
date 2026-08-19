@@ -814,3 +814,268 @@ async fn sigterm_drains_inflight_and_exits_zero() {
         "in-flight handler finished and recorded"
     );
 }
+
+// ---------------------------------------------------------------------------
+// §5.4: the in-progress keepalive must actually prevent redelivery
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn keepalive_prevents_redelivery() {
+    let Some(_) = nats_server() else {
+        eprintln!("skipping");
+        return;
+    };
+    let dir = std::env::temp_dir().join(format!("agentd-e2e-ka-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("work")).unwrap();
+    let h = Env::handler(&dir, "h", r#"cat > /dev/null; sleep 4; echo ran >> count"#);
+    // AckWait 3s < handler 4s: only the keepalive (progress every 1s) keeps
+    // the delivery lease alive. A free second slot means a redelivered copy
+    // WOULD be pulled while the handler runs — and logged as an in-flight
+    // drop — if the keepalive failed.
+    let env = Env::with_config(
+        "ka",
+        &[("ka_agent", &h, 2)],
+        "ack_wait_secs = 3\nack_progress_interval_secs = 1\n",
+    )
+    .await;
+    env.publish("agent.events.ka_agent", &envelope("ka-1", "ka_agent"))
+        .await;
+    await_file(&env, "count", "ran", Duration::from_secs(20));
+    // Margin beyond AckWait so a failing keepalive would have redelivered.
+    std::thread::sleep(Duration::from_secs(2));
+    let count = std::fs::read_to_string(env.work().join("count")).unwrap();
+    assert_eq!(count.lines().count(), 1, "handler runs exactly once");
+    let log = env.daemon.log();
+    assert_eq!(
+        log.matches("handler spawned").count(),
+        1,
+        "exactly one handler lifecycle: {log}"
+    );
+    assert!(
+        !log.contains("in-flight duplicate dropped"),
+        "keepalive failed: the server redelivered while the handler ran: {log}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// §21.3: running handlers survive a reload; future events use the new
+// handler after an update
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn reload_does_not_interrupt_inflight() {
+    let Some(_) = nats_server() else {
+        eprintln!("skipping");
+        return;
+    };
+    let dir = std::env::temp_dir().join(format!("agentd-e2e-hupif-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("work")).unwrap();
+    let h = Env::handler(&dir, "h", r#"cat > /dev/null; sleep 2; echo done >> done"#);
+    let env = Env::new("hupif", &[("hif_agent", &h, 1)]).await;
+    env.publish("agent.events.hif_agent", &envelope("hi-1", "hif_agent"))
+        .await;
+    // Handler now in flight (2s sleep). Change concurrency on disk + SIGHUP
+    // so the reload does real work (dispatcher state recreated).
+    std::thread::sleep(Duration::from_millis(800));
+    let cfg_path = env.dir.join("agents.d/hif_agent.toml");
+    let cfg = std::fs::read_to_string(&cfg_path)
+        .unwrap()
+        .replace("max_concurrency = 1", "max_concurrency = 2");
+    std::fs::write(&cfg_path, cfg).unwrap();
+    libc_kill(env.daemon.child.id() as i32, 1); // SIGHUP
+
+    await_file(&env, "done", "done", Duration::from_secs(15));
+    let done = std::fs::read_to_string(env.work().join("done")).unwrap();
+    assert_eq!(
+        done.lines().count(),
+        1,
+        "in-flight handler finished, not killed"
+    );
+    let log = env.daemon.log();
+    assert!(log.contains("handler exited"), "{log}");
+}
+
+#[tokio::test]
+async fn update_handler_future_events_use_new() {
+    let Some(_) = nats_server() else {
+        eprintln!("skipping");
+        return;
+    };
+    let dir = std::env::temp_dir().join(format!("agentd-e2e-updh-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("work")).unwrap();
+    let h1 = Env::handler(&dir, "h1", r#"cat > a.bin"#);
+    let h2 = Env::handler(&dir, "h2", r#"cat > b.bin"#);
+    let env = Env::new("updh", &[("uh_agent", &h1, 1)]).await;
+
+    env.publish("agent.events.uh_agent", &envelope("uh-1", "uh_agent"))
+        .await;
+    await_file(&env, "a.bin", "uh-1", Duration::from_secs(20));
+
+    // Swap the handler via the control socket.
+    let r = env
+        .daemon
+        .rpc(Request::Update {
+            agent: agent_daemon::registry::AgentConfig {
+                agent_id: agent_daemon::agent_id::AgentId::parse("uh_agent").unwrap(),
+                handler: h2.into(),
+                max_concurrency: 1,
+                working_directory: Some(env.work().to_path_buf()),
+                enabled: true,
+            },
+        })
+        .await
+        .unwrap();
+    assert!(r.ok, "{r:?}");
+
+    env.publish("agent.events.uh_agent", &envelope("uh-2", "uh_agent"))
+        .await;
+    let b = await_file(&env, "b.bin", "uh-2", Duration::from_secs(20));
+    let a = std::fs::read_to_string(env.work().join("a.bin")).unwrap();
+    assert!(b.contains("uh-2") && !b.contains("uh-1"), "{b}");
+    assert!(
+        a.contains("uh-1") && !a.contains("uh-2"),
+        "old handler saw the new event: {a}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Operator path: agentdctl init against the live server
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn agentdctl_init_is_idempotent() {
+    let Some(_) = nats_server() else {
+        eprintln!("skipping");
+        return;
+    };
+    let dir = std::env::temp_dir().join(format!("agentd-e2e-init-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("work")).unwrap();
+    let _env = Env::new("init", &[]).await; // server up, daemon indifferent
+
+    for _ in 0..2 {
+        let out = tokio::process::Command::new(env!("CARGO_BIN_EXE_agentdctl"))
+            .arg("--config")
+            .arg(_env.dir.join("agentd.toml"))
+            .arg("init")
+            .output()
+            .await
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(stdout.contains("ready"), "{stdout}");
+    }
+
+    // The stream exists on the server.
+    let client = async_nats::connect(_env.server.url()).await.unwrap();
+    let js = async_nats::jetstream::new(client);
+    js.get_stream("AGENT_EVENTS").await.expect("stream exists");
+}
+
+// ---------------------------------------------------------------------------
+// §9.1 under load: delivery order holds for a serial agent at 20 events,
+// and across a reload + live registration mid-stream
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn order_preserved_under_load() {
+    let Some(_) = nats_server() else {
+        eprintln!("skipping");
+        return;
+    };
+    let dir = std::env::temp_dir().join(format!("agentd-e2e-ordr-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("work")).unwrap();
+    let h = Env::handler(&dir, "h", r#"echo "$AGENTD_EVENT_ID" >> order"#);
+    let env = Env::new("ordr", &[("ordr_agent", &h, 1)]).await;
+    for i in 0..20 {
+        env.publish(
+            "agent.events.ordr_agent",
+            &envelope(&format!("ol-{i:02}"), "ordr_agent"),
+        )
+        .await;
+    }
+    let order = await_file(&env, "order", "ol-19", Duration::from_secs(60));
+    let got: Vec<&str> = order.lines().collect();
+    let want: Vec<String> = (0..20).map(|i| format!("ol-{i:02}")).collect();
+    assert_eq!(
+        got,
+        want.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+        "exact publish order"
+    );
+}
+
+#[tokio::test]
+async fn mixed_load_reload_and_live_register() {
+    let Some(_) = nats_server() else {
+        eprintln!("skipping");
+        return;
+    };
+    let dir = std::env::temp_dir().join(format!("agentd-e2e-mix-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("work")).unwrap();
+    let hm = Env::handler(&dir, "hm", r#"echo "$AGENTD_EVENT_ID" >> mx"#);
+    let hn = Env::handler(&dir, "hn", r#"echo "$AGENTD_EVENT_ID" >> nx"#);
+    let env = Env::new("mix", &[("mx_agent", &hm, 1)]).await;
+
+    // First burst.
+    for i in 0..5 {
+        env.publish(
+            "agent.events.mx_agent",
+            &envelope(&format!("mx-{i:02}"), "mx_agent"),
+        )
+        .await;
+    }
+    std::thread::sleep(Duration::from_millis(300));
+
+    // Mid-flight: real reload (concurrency bump) + live-register a second agent.
+    let cfg_path = env.dir.join("agents.d/mx_agent.toml");
+    let cfg = std::fs::read_to_string(&cfg_path)
+        .unwrap()
+        .replace("max_concurrency = 1", "max_concurrency = 2");
+    std::fs::write(&cfg_path, cfg).unwrap();
+    libc_kill(env.daemon.child.id() as i32, 1); // SIGHUP
+    let r = env
+        .daemon
+        .rpc(Request::Register {
+            agent: agent_daemon::registry::AgentConfig {
+                agent_id: agent_daemon::agent_id::AgentId::parse("nx_agent").unwrap(),
+                handler: hn.into(),
+                max_concurrency: 1,
+                working_directory: Some(env.work().to_path_buf()),
+                enabled: true,
+            },
+        })
+        .await
+        .unwrap();
+    assert!(r.ok, "{r:?}");
+    env.publish("agent.events.nx_agent", &envelope("nx-00", "nx_agent"))
+        .await;
+
+    // Second burst for the first agent.
+    for i in 5..10 {
+        env.publish(
+            "agent.events.mx_agent",
+            &envelope(&format!("mx-{i:02}"), "mx_agent"),
+        )
+        .await;
+    }
+
+    let mx = await_file(&env, "mx", "mx-09", Duration::from_secs(60));
+    let nx = await_file(&env, "nx", "nx-00", Duration::from_secs(30));
+    let got: Vec<&str> = mx.lines().collect();
+    let want: Vec<String> = (0..10).map(|i| format!("mx-{i:02}")).collect();
+    assert_eq!(
+        got,
+        want.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+        "order holds across reload + concurrent agent"
+    );
+    assert!(nx.contains("nx-00"), "{nx}");
+}
