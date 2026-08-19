@@ -5,6 +5,7 @@
 
 pub mod agent_id;
 pub mod config;
+pub mod dedup;
 pub mod error;
 pub mod event;
 pub mod logging;
