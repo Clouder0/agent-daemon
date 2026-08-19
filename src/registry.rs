@@ -106,6 +106,11 @@ fn is_executable(path: &Path) -> bool {
 
 /// A registry reload, expressed as a diff the relay (#2) and dispatcher (#3)
 /// subscribe to (whitepaper §7.4).
+///
+/// Precedence: when `enabled` flips together with other field changes, only
+/// `Enabled`/`Disabled` is emitted — carrying the *full new config*. Change
+/// subscribers must read the config from the change rather than expecting a
+/// separate `Updated`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Change {
     Added(AgentConfig),
@@ -160,6 +165,15 @@ impl Registry {
         {
             let entry = entry.map_err(|e| AgentdError::config(format!("read_dir error: {e}")))?;
             let path = entry.path();
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with('.') && name.ends_with(".tmp") {
+                // Stale temp file from a failed or crashed persist — ours by
+                // naming convention (`.{agent_id}.{pid}.tmp`). Best-effort
+                // removal so the directory stays self-healing.
+                let _ = std::fs::remove_file(&path);
+                continue;
+            }
             if path.extension().and_then(|e| e.to_str()) != Some("toml") {
                 continue;
             }
@@ -178,9 +192,7 @@ impl Registry {
                 )));
             }
             config.validate()?;
-            for w in config.liveness_warnings() {
-                tracing::warn!(agent_id = %id, "{}", w);
-            }
+            warn_liveness(&config);
             agents.insert(id, config);
         }
         Ok(Self {
@@ -217,6 +229,7 @@ impl Registry {
     /// concurrent on the read lock and are never blocked by disk I/O.
     pub fn register(&self, config: &AgentConfig) -> Result<(), AgentdError> {
         config.validate()?;
+        warn_liveness(config);
         let _guard = self
             .mutation
             .lock()
@@ -236,6 +249,7 @@ impl Registry {
     /// Replace an existing agent's config. Errors if absent.
     pub fn update(&self, config: &AgentConfig) -> Result<(), AgentdError> {
         config.validate()?;
+        warn_liveness(config);
         let _guard = self
             .mutation
             .lock()
@@ -388,6 +402,15 @@ fn read_agent_file(path: &Path) -> Result<AgentConfig, AgentdError> {
     })?;
     config.validate()?;
     Ok(config)
+}
+
+/// Emit liveness warnings (missing / non-executable handler) with the agent
+/// id attached. Shared by load, register, and update so every entry path
+/// gives the same immediate feedback on a typo'd handler path.
+fn warn_liveness(config: &AgentConfig) {
+    for w in config.liveness_warnings() {
+        tracing::warn!(agent_id = %config.agent_id, "{w}");
+    }
 }
 
 #[cfg(test)]
@@ -551,6 +574,54 @@ mod tests {
         let disk: AgentConfig =
             toml::from_str(&std::fs::read_to_string(dir.join("race.id.toml")).unwrap()).unwrap();
         assert_eq!(mem[0].handler, disk.handler, "disk and memory diverged");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Stale persist temp files (`.{agent_id}.{pid}.tmp`) are swept at load;
+    /// real configs are untouched.
+    #[test]
+    fn load_sweeps_stale_tmp_files() {
+        let dir = temp_dir("tmpsweep");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.toml"), toml_string(&cfg("a", "/bin/a", 1))).unwrap();
+        std::fs::write(dir.join(".a.12345.tmp"), "partial").unwrap();
+        std::fs::write(dir.join(".b.999.tmp"), "partial").unwrap();
+
+        let r = Registry::load(&dir).unwrap();
+        assert_eq!(r.snapshot().len(), 1, "real config must still load");
+        assert!(!dir.join(".a.12345.tmp").exists(), "stale tmp swept");
+        assert!(!dir.join(".b.999.tmp").exists(), "stale tmp swept");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Liveness warnings distinguish missing vs non-executable handlers.
+    #[test]
+    fn liveness_warnings_classify_handlers() {
+        // Missing handler.
+        let missing = cfg("a.b", "/nonexistent/handler", 1);
+        assert_eq!(missing.liveness_warnings().len(), 1);
+        assert!(missing.liveness_warnings()[0].contains("does not exist"));
+
+        // Present but not executable.
+        let dir = temp_dir("liveness");
+        let script = dir.join("handler");
+        std::fs::write(&script, "#!/bin/sh\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let not_exec = AgentConfig {
+            handler: script.clone(),
+            ..cfg("a.b", "/bin/true", 1)
+        };
+        assert_eq!(not_exec.liveness_warnings().len(), 1);
+        assert!(not_exec.liveness_warnings()[0].contains("not executable"));
+
+        // Executable: no warnings.
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let exec = AgentConfig {
+            handler: script,
+            ..cfg("a.b", "/bin/true", 1)
+        };
+        assert!(exec.liveness_warnings().is_empty());
         std::fs::remove_dir_all(&dir).ok();
     }
 }
