@@ -111,11 +111,11 @@ Personal Domain
 ├── Self-hosted NATS JetStream
 ├── Desktop A
 │   └── agentd
-│       ├── coding/main
-│       └── assistant/personal
+│       ├── coding.main
+│       └── assistant.personal
 └── Server B
     └── agentd
-        └── research/main
+        └── research.main
 ```
 
 One `agentd` can host multiple Agents.
@@ -168,9 +168,9 @@ An `agent_id` is a logical Agent name within a Domain.
 For example:
 
 ```text
-coding/main
-assistant/personal
-research/market
+coding.main
+assistant.personal
+research.market
 ```
 
 It is not:
@@ -188,14 +188,14 @@ It means only:
 v0 grammar:
 
 ```text
-agent_id := segment ("/" segment)*
-segment  := [a-z0-9][a-z0-9_-]{0,62}
+agent_id := token ("." token)*
+token    := [a-z0-9][a-z0-9_-]{0,62}
 ```
 
-`.` is not allowed inside a segment, so the mapping onto NATS subjects is safe:
+`.` is both the id separator and NATS's own subject separator, so the id, its filter subject, and its config filename are the same dot-form (identity, injective — ADR-0004):
 
 ```text
-coding/main
+coding.main
 → agent.events.coding.main
 ```
 
@@ -450,13 +450,13 @@ Each Agent maps to one subject:
 agent.events.<encoded-agent-id>
 ```
 
-Encoding rule:
+Encoding rule (identity, ADR-0004):
 
 ```text
-coding/main
+coding.main
 → agent.events.coding.main
 
-assistant/personal
+assistant.personal
 → agent.events.assistant.personal
 ```
 
@@ -474,7 +474,7 @@ For example:
 
 ```text
 Agent ID:
-    coding/main
+    coding.main
 
 Filter Subject:
     agent.events.coding.main
@@ -565,7 +565,7 @@ Example:
 {
   "version": 1,
   "event_id": "01J6ZP8R5EF4Y42KABCD123456",
-  "agent_id": "coding/main",
+  "agent_id": "coding.main",
   "type": "im.message",
   "created_at": "2026-08-19T12:00:00Z",
   "payload": {
@@ -689,9 +689,9 @@ One machine's `agentd` can register multiple Agents:
 
 ```text
 agentd
-├── coding/main
-├── assistant/personal
-└── research/market
+├── coding.main
+├── assistant.personal
+└── research.market
 ```
 
 Each Agent registers:
@@ -705,7 +705,7 @@ Each Agent registers:
 Example configuration:
 
 ```toml
-agent_id = "coding/main"
+agent_id = "coding.main"
 handler = "/home/clouder/agents/coding-main/on-event"
 max_concurrency = 1
 working_directory = "/home/clouder/projects/main"
@@ -777,15 +777,15 @@ Recommended CLI:
 
 ```bash
 agentdctl register \
-  --id coding/main \
+  --id coding.main \
   --handler /home/clouder/agents/coding-main/on-event \
   --max-concurrency 1 \
   --cwd /home/clouder/projects/main
 
-agentdctl update coding/main \
+agentdctl update coding.main \
   --handler /home/clouder/agents/coding-main-v2/on-event
 
-agentdctl unregister coding/main
+agentdctl unregister coding.main
 
 agentdctl list
 
@@ -882,7 +882,7 @@ stdin:
 {
   "version": 1,
   "event_id": "...",
-  "agent_id": "coding/main",
+  "agent_id": "coding.main",
   "type": "im.message",
   "created_at": "...",
   "payload": {},
@@ -1683,7 +1683,7 @@ Example:
 {
   "op": "register",
   "agent": {
-    "agent_id": "coding/main",
+    "agent_id": "coding.main",
     "handler": "/home/clouder/agents/coding-main/on-event",
     "max_concurrency": 1,
     "working_directory": "/home/clouder/projects/main",
@@ -1703,7 +1703,7 @@ Response:
 Other requests:
 
 ```json
-{"op": "unregister", "agent_id": "coding/main"}
+{"op": "unregister", "agent_id": "coding.main"}
 ```
 
 ```json
@@ -1804,7 +1804,7 @@ If `ensure_runtime()` or `deliver()` may fail transiently and the Agent wants re
 
 ```bash
 agentdctl register \
-  --id coding/main \
+  --id coding.main \
   --handler /home/clouder/agents/coding-main/on-event \
   --max-concurrency 1 \
   --cwd /home/clouder/projects/main
@@ -1814,7 +1814,7 @@ agentdctl register \
 
 1. persists the configuration;
 2. creates or binds the Durable Consumer;
-3. starts pulling `agent.events.coding.main`.
+3. starts pulling `agent.events.coding.main` (id `coding.main`).
 
 ---
 
@@ -1830,7 +1830,7 @@ agent.events.coding.main
 {
   "version": 1,
   "event_id": "01J6ZP8R5EF4Y42KABCD123456",
-  "agent_id": "coding/main",
+  "agent_id": "coding.main",
   "type": "im.message",
   "created_at": "2026-08-19T12:00:00Z",
   "payload": {

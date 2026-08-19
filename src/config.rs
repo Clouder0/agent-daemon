@@ -20,6 +20,10 @@ pub struct DaemonConfig {
     pub nats_creds: Option<std::path::PathBuf>,
     /// JetStream stream name (whitepaper §5.1).
     pub stream_name: String,
+    /// Directory of per-agent registration files (`agents.d`). Defaults to
+    /// `$XDG_CONFIG_HOME/agentd/agents.d` when unset; missing dir = empty
+    /// registry, created on first write.
+    pub agents_dir: Option<std::path::PathBuf>,
     /// Control socket path; defaults to `$XDG_RUNTIME_DIR/agentd/control.sock`
     /// when unset (resolved by the daemon at startup).
     pub control_socket: Option<std::path::PathBuf>,
@@ -45,6 +49,7 @@ impl Default for DaemonConfig {
             nats_url: "nats://127.0.0.1:4222".into(),
             nats_creds: None,
             stream_name: "AGENT_EVENTS".into(),
+            agents_dir: None,
             control_socket: None,
             dedup_path: None,
             dedup_ttl_days: 14,

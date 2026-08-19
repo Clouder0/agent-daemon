@@ -8,3 +8,4 @@ pub mod config;
 pub mod error;
 pub mod event;
 pub mod logging;
+pub mod registry;

@@ -291,7 +291,7 @@ mod tests {
         let capture = Capture::default();
         let dispatch = tracing::Dispatch::new(tracing_subscriber::registry().with(capture.clone()));
         tracing::dispatcher::with_default(&dispatch, || {
-            let agent = AgentId::parse("coding/main").unwrap();
+            let agent = AgentId::parse("coding.main").unwrap();
             let span = dispatch_span(&agent, "ev-1", "agent-abc", 42);
             let _guard = span.enter();
             events::handler_exited(0, 214);
@@ -300,7 +300,7 @@ mod tests {
         assert_eq!(lines.len(), 1, "one event captured: {lines:?}");
         assert!(
             lines[0].contains(
-                "dispatch[agent_id=coding/main,event_id=ev-1,consumer=agent-abc,stream_sequence=42]"
+                "dispatch[agent_id=coding.main,event_id=ev-1,consumer=agent-abc,stream_sequence=42]"
             ),
             "span fields missing: {lines:?}"
         );
@@ -342,7 +342,7 @@ mod tests {
         let capture = Capture::default();
         let dispatch = tracing::Dispatch::new(tracing_subscriber::registry().with(capture.clone()));
         tracing::dispatcher::with_default(&dispatch, || {
-            let agent = AgentId::parse("coding/main").unwrap();
+            let agent = AgentId::parse("coding.main").unwrap();
             let dispatch = dispatch_span(&agent, "ev-9", "agent-abc", 7);
             let _dispatch_guard = dispatch.enter();
             let handler = handler_span("/bin/on-event", 99);
@@ -363,7 +363,7 @@ mod tests {
         let capture = Capture::default();
         let dispatch = tracing::Dispatch::new(tracing_subscriber::registry().with(capture.clone()));
         tracing::dispatcher::with_default(&dispatch, || {
-            let agent = AgentId::parse("assistant/personal").unwrap();
+            let agent = AgentId::parse("assistant.personal").unwrap();
             events::nats_connected("nats://127.0.0.1:4222");
             events::agent_registered(&agent);
             events::consumer_bound(&agent, "agent-xyz");

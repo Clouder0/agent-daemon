@@ -19,13 +19,13 @@ Agent-owned Handler                  ← all agent policy: auth, wake, queue, st
 Agent Runtime                        ← understands the event, decides what to do
 ```
 
-`agentd` is deliberately mechanism-only: no LLM clients, no agent loop, no context management, no retries, no sender verification. Everything agent-specific lives in a handler executable each agent registers. An `agent_id` is a routing name decoupled from process liveness — which is what makes agent sleep, migration, and self-replacement (a new generation updating its own handler binding) first-class.
+`agentd` is deliberately mechanism-only: no LLM clients, no agent loop, no context management, no retries, no sender verification. Everything agent-specific lives in a handler executable each agent registers. An `agent_id` (dot-separated, e.g. `coding.main`) is a routing name decoupled from process liveness — which is what makes agent sleep, migration, and self-replacement (a new generation updating its own handler binding) first-class.
 
 **Status:** pre-alpha, building in public. The v0 specification is [`docs/whitepaper-v0.md`](docs/whitepaper-v0.md).
 
 ## Features (v0 target)
 
-- One long-running daemon per machine hosting many agents
+- One long-running daemon per machine hosting many agents (ids like `coding.main`)
 - Durable offline delivery via NATS JetStream (per-agent durable pull consumers)
 - Dispatch = execute the registered handler with the event JSON on stdin
 - Serial per agent by default; configurable concurrency

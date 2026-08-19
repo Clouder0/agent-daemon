@@ -107,11 +107,11 @@ Personal Domain
 ├── Self-hosted NATS JetStream
 ├── Desktop A
 │   └── agentd
-│       ├── coding/main
-│       └── assistant/personal
+│       ├── coding.main
+│       └── assistant.personal
 └── Server B
     └── agentd
-        └── research/main
+        └── research.main
 ```
 
 一个 `agentd` 可以承载多个 Agent。
@@ -164,9 +164,9 @@ Core NATS 只向当前在线的 Subscriber 投递消息，而 JetStream 增加�
 例如：
 
 ```text
-coding/main
-assistant/personal
-research/market
+coding.main
+assistant.personal
+research.market
 ```
 
 它不是：
@@ -191,7 +191,7 @@ segment  := [a-z0-9][a-z0-9_-]{0,62}
 `.` 不允许出现在 Segment 中，因此可以安全映射到 NATS Subject：
 
 ```text
-coding/main
+coding.main
 → agent.events.coding.main
 ```
 
@@ -450,10 +450,10 @@ agent.events.<encoded-agent-id>
 编码规则：
 
 ```text
-coding/main
+coding.main
 → agent.events.coding.main
 
-assistant/personal
+assistant.personal
 → agent.events.assistant.personal
 ```
 
@@ -471,7 +471,7 @@ assistant/personal
 
 ```text
 Agent ID:
-    coding/main
+    coding.main
 
 Filter Subject:
     agent.events.coding.main
@@ -562,7 +562,7 @@ v0 不要求实现这种细粒度限制。
 {
   "version": 1,
   "event_id": "01J6ZP8R5EF4Y42KABCD123456",
-  "agent_id": "coding/main",
+  "agent_id": "coding.main",
   "type": "im.message",
   "created_at": "2026-08-19T12:00:00Z",
   "payload": {
@@ -687,9 +687,9 @@ Daemon 自身的配置（v0.1）持久化在 `$XDG_CONFIG_HOME/agentd/agentd.tom
 
 ```text
 agentd
-├── coding/main
-├── assistant/personal
-└── research/market
+├── coding.main
+├── assistant.personal
+└── research.market
 ```
 
 每个 Agent 注册：
@@ -703,7 +703,7 @@ agentd
 示例配置：
 
 ```toml
-agent_id = "coding/main"
+agent_id = "coding.main"
 handler = "/home/clouder/agents/coding-main/on-event"
 max_concurrency = 1
 working_directory = "/home/clouder/projects/main"
@@ -775,15 +775,15 @@ reload
 
 ```bash
 agentdctl register \
-  --id coding/main \
+  --id coding.main \
   --handler /home/clouder/agents/coding-main/on-event \
   --max-concurrency 1 \
   --cwd /home/clouder/projects/main
 
-agentdctl update coding/main \
+agentdctl update coding.main \
   --handler /home/clouder/agents/coding-main-v2/on-event
 
-agentdctl unregister coding/main
+agentdctl unregister coding.main
 
 agentdctl list
 
@@ -873,7 +873,7 @@ stdin：
 {
   "version": 1,
   "event_id": "...",
-  "agent_id": "coding/main",
+  "agent_id": "coding.main",
   "type": "im.message",
   "created_at": "...",
   "payload": {},
@@ -1690,7 +1690,7 @@ Control Socket 可以采用每行一个 JSON Request / Response。
 {
   "op": "register",
   "agent": {
-    "agent_id": "coding/main",
+    "agent_id": "coding.main",
     "handler": "/home/clouder/agents/coding-main/on-event",
     "max_concurrency": 1,
     "working_directory": "/home/clouder/projects/main",
@@ -1710,7 +1710,7 @@ Control Socket 可以采用每行一个 JSON Request / Response。
 其他请求：
 
 ```json
-{"op": "unregister", "agent_id": "coding/main"}
+{"op": "unregister", "agent_id": "coding.main"}
 ```
 
 ```json
@@ -1811,7 +1811,7 @@ if __name__ == "__main__":
 
 ```bash
 agentdctl register \
-  --id coding/main \
+  --id coding.main \
   --handler /home/clouder/agents/coding-main/on-event \
   --max-concurrency 1 \
   --cwd /home/clouder/projects/main
@@ -1839,7 +1839,7 @@ agent.events.coding.main
 {
   "version": 1,
   "event_id": "01J6ZP8R5EF4Y42KABCD123456",
-  "agent_id": "coding/main",
+  "agent_id": "coding.main",
   "type": "im.message",
   "created_at": "2026-08-19T12:00:00Z",
   "payload": {
