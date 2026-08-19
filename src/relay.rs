@@ -23,13 +23,14 @@ use crate::error::AgentdError;
 use crate::logging::events;
 use crate::registry::{Change, Registry};
 
-/// Long-poll expiry for pulls (§5.3): wakes the loop at least this often to
-/// re-read free slots.
-const FETCH_EXPIRES: Duration = Duration::from_secs(30);
-
 /// Client-side cap on any single fetch request or message wait (see
-/// `pull_loop`): bounds post-reconnect recovery.
+/// `pull_loop`): bounds post-reconnect recovery after a dead connection.
 const FETCH_CAP: Duration = Duration::from_secs(10);
+
+/// Server-side long-poll expiry (§5.3), aligned with the client cap so both
+/// ends agree on the poll lifetime and idle agents do not re-issue pulls
+/// that the server would happily keep holding.
+const FETCH_EXPIRES: Duration = FETCH_CAP;
 
 /// Idle sleep when no dispatch slots are free: a freed slot is noticed
 /// within ~1s without coupling the relay to the dispatcher.
@@ -73,7 +74,7 @@ pub async fn ensure_stream(js: &Context, config: &DaemonConfig) -> Result<(), Ag
         ..Default::default()
     };
     js.get_or_create_stream(stream).await.map_err(|e| {
-        AgentdError::config(format!("cannot create stream {}: {e}", config.stream_name))
+        AgentdError::relay(format!("cannot create stream {}: {e}", config.stream_name))
     })?;
     Ok(())
 }
@@ -99,6 +100,9 @@ pub async fn connect(
             })?,
         None => async_nats::ConnectOptions::new(),
     };
+    if let Some(creds) = &config.nats_creds {
+        warn_if_loose_creds(creds);
+    }
     tracing::info!(
         nats_url = %crate::logging::redact_url(&config.nats_url),
         "connecting to relay (retrying until reachable)"
@@ -129,7 +133,7 @@ pub async fn connect(
         .retry_on_initial_connect()
         .connect(&config.nats_url)
         .await
-        .map_err(|e| AgentdError::config(format!("cannot connect to {}: {e}", config.nats_url)))?;
+        .map_err(|e| AgentdError::relay(format!("cannot connect to {}: {e}", config.nats_url)))?;
     Ok(client)
 }
 
@@ -258,7 +262,7 @@ impl Relay {
         max_concurrency: u32,
     ) -> Result<PullConsumer, AgentdError> {
         let stream = self.js.get_stream(&self.stream_name).await.map_err(|e| {
-            AgentdError::config(format!("stream {} unavailable: {e}", self.stream_name))
+            AgentdError::relay(format!("stream {} unavailable: {e}", self.stream_name))
         })?;
         let consumer: PullConsumer = stream
             .get_or_create_consumer(
@@ -266,7 +270,7 @@ impl Relay {
                 consumer_config(id, self.ack_wait, max_concurrency as usize),
             )
             .await
-            .map_err(|e| AgentdError::config(format!("cannot bind consumer for {id}: {e}")))?;
+            .map_err(|e| AgentdError::relay(format!("cannot bind consumer for {id}: {e}")))?;
         Ok(consumer)
     }
 
@@ -421,6 +425,24 @@ async fn in_progress_keepalive(message: jetstream::Message, interval: Duration) 
         tokio::time::sleep(interval).await;
         if let Err(e) = message.ack_with(jetstream::AckKind::Progress).await {
             tracing::debug!("in-progress ack failed: {e}");
+        }
+    }
+}
+
+/// §3.4 requires credentials at mode 0600; warn (do not refuse) when the
+/// file is group/world accessible — the requirement is a *should*, and a
+/// loud warning beats silent acceptance.
+fn warn_if_loose_creds(path: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(path)
+            && meta.permissions().mode() & 0o077 != 0
+        {
+            tracing::warn!(
+                creds = %path.display(),
+                "credentials file is group/world accessible; whitepaper §3.4 requires 0600"
+            );
         }
     }
 }

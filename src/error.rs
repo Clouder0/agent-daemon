@@ -13,6 +13,9 @@ pub enum AgentdError {
 
     #[error("dedup store error: {0}")]
     DedupStore(String),
+
+    #[error("relay error: {0}")]
+    Relay(String),
 }
 
 impl AgentdError {
@@ -30,6 +33,10 @@ impl AgentdError {
 
     pub(crate) fn dedup_store(reason: String) -> Self {
         Self::DedupStore(reason)
+    }
+
+    pub(crate) fn relay(reason: String) -> Self {
+        Self::Relay(reason)
     }
 }
 
