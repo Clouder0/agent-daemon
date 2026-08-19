@@ -54,16 +54,21 @@ jobs:
         with:
           command: check advisories licenses bans sources
 
-  # E2E tests against a real nats-server (JetStream) land with the relay
-  # implementation (see whitepaper §21.2). The job skeleton is kept here so
-  # the wiring is ready:
-  # integration:
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@v7
-  #     - uses: dtolnay/rust-toolchain@stable
-  #     - uses: Swatinem/rust-cache@v2
-  #     - uses: taiki-e/install-action@nextest
-  #     - run: |
-  #         docker run -d --name nats -p 4222:4222 nats:latest -js
-  #         cargo nextest run --test-include-unknown
+  # E2E: the real agentd binary against a real nats-server with JetStream
+  # (whitepaper §21.2 matrix; see tests/e2e.rs for the documented
+  # deviations). The server binary is installed from upstream releases and
+  # spawned per test as a child process.
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
+      - name: Install nats-server
+        run: |
+          curl -fsSL https://github.com/nats-io/nats-server/releases/download/v2.11.6/nats-server-v2.11.6-linux-amd64.tar.gz \
+            | tar -xz -C /tmp
+          install -m 0755 /tmp/nats-server-v2.11.6-linux-amd64/nats-server /usr/local/bin/nats-server
+          nats-server --version
+      - run: AGENTD_E2E=1 cargo nextest run --test e2e
