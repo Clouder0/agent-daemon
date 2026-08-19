@@ -59,7 +59,7 @@ mod tests {
     const EXAMPLE: &str = r#"{
         "version": 1,
         "event_id": "01J6ZP8R5EF4Y42KABCD123456",
-        "agent_id": "coding.main",
+        "agent_id": "coding_main",
         "type": "im.message",
         "created_at": "2026-08-19T12:00:00Z",
         "payload": {"text": "please continue"},
@@ -70,7 +70,7 @@ mod tests {
     fn parses_whitepaper_example() {
         let env = EventEnvelope::parse(EXAMPLE.as_bytes()).unwrap();
         assert_eq!(env.event_id, "01J6ZP8R5EF4Y42KABCD123456");
-        assert_eq!(env.agent_id.to_string(), "coding.main");
+        assert_eq!(env.agent_id.to_string(), "coding_main");
         assert_eq!(env.event_type, "im.message");
         assert_eq!(
             env.metadata.as_ref().unwrap()["source"],
@@ -112,7 +112,7 @@ mod tests {
 
     #[test]
     fn invalid_agent_id_is_terminal() {
-        let bad = EXAMPLE.replace("\"agent_id\": \"coding.main\"", "\"agent_id\": \"Bad Id\"");
+        let bad = EXAMPLE.replace("\"agent_id\": \"coding_main\"", "\"agent_id\": \"Bad Id\"");
         assert!(EventEnvelope::parse(bad.as_bytes()).is_err());
     }
 

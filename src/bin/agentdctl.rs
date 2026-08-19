@@ -28,7 +28,7 @@ enum Command {
 
     /// Register a local agent.
     Register {
-        /// Agent id, e.g. `coding.main`.
+        /// Agent id, e.g. `coding_main`.
         #[arg(long)]
         id: String,
 
@@ -47,7 +47,7 @@ enum Command {
 
     /// Update a registered agent.
     Update {
-        /// Agent id, e.g. `coding.main`.
+        /// Agent id, e.g. `coding_main`.
         id: String,
 
         /// New handler executable path.
@@ -57,7 +57,7 @@ enum Command {
 
     /// Unregister a local agent.
     Unregister {
-        /// Agent id, e.g. `coding.main`.
+        /// Agent id, e.g. `coding_main`.
         id: String,
     },
 

@@ -12,7 +12,7 @@ use agent_daemon::dispatcher::{Acker, DedupCheck, Delivery, Dispatcher};
 use agent_daemon::error::AgentdError;
 use agent_daemon::registry::{AgentConfig, Registry};
 
-const AGENT: &str = "t.agent";
+const AGENT: &str = "t_agent";
 
 // -- fakes -------------------------------------------------------------------
 
@@ -213,7 +213,7 @@ async fn env_vars_exposed_to_handler() {
 
     let env = std::fs::read_to_string(f.workdir().join("env.txt")).unwrap();
     for expected in [
-        "AGENTD_AGENT_ID=t.agent",
+        "AGENTD_AGENT_ID=t_agent",
         "AGENTD_EVENT_ID=e-env",
         "AGENTD_EVENT_TYPE=im.message",
         "AGENTD_STREAM_SEQUENCE=7",
@@ -297,7 +297,7 @@ async fn invalid_envelope_is_terminal() {
     let mut wrong = f.delivery("x");
     wrong.raw = String::from_utf8(envelope("e-x").clone())
         .unwrap()
-        .replace("\"agent_id\":\"t.agent\"", "\"agent_id\":\"other.agent\"")
+        .replace("\"agent_id\":\"t_agent\"", "\"agent_id\":\"other_agent\"")
         .into_bytes();
     f.dispatcher.dispatch(wrong).await;
 
@@ -519,7 +519,7 @@ async fn unregistered_and_disabled_agents_term() {
     let acker = FakeAcker::default();
     f.dispatcher
         .dispatch(Delivery {
-            agent: AgentId::parse("ghost.agent").unwrap(),
+            agent: AgentId::parse("ghost_agent").unwrap(),
             raw: envelope("e-ghost"),
             stream_sequence: 1,
             consumer_sequence: 1,
@@ -544,7 +544,7 @@ async fn available_reports_free_slots() {
     assert_eq!(f.dispatcher.available(&id), 2);
     assert_eq!(
         f.dispatcher
-            .available(&AgentId::parse("ghost.agent").unwrap()),
+            .available(&AgentId::parse("ghost_agent").unwrap()),
         0
     );
     f.registry.set_enabled(&id, false).unwrap();

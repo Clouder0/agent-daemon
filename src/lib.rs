@@ -11,3 +11,4 @@ pub mod error;
 pub mod event;
 pub mod logging;
 pub mod registry;
+pub mod relay;

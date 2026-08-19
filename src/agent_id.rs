@@ -1,5 +1,5 @@
 //! Logical agent identity and NATS subject encoding (whitepaper §2.3,
-//! ADR-0004).
+//! ADR-0006).
 //!
 //! Grammar:
 //!
@@ -26,7 +26,7 @@ const MAX_TOKENS: usize = 16;
 /// Maximum length of one token.
 const MAX_TOKEN_LEN: usize = 63;
 
-/// A validated agent id, e.g. `coding.main`.
+/// A validated agent id, e.g. `coding_main`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct AgentId {
     raw: String,
@@ -35,7 +35,7 @@ pub struct AgentId {
 impl AgentId {
     /// Parse and validate an agent id per the v0 grammar.
     pub fn parse(input: &str) -> Result<Self, AgentdError> {
-        let tokens = input.split('.').collect::<Vec<_>>();
+        let tokens = input.split('_').collect::<Vec<_>>();
         if tokens.len() > MAX_TOKENS {
             return Err(AgentdError::invalid_agent_id(format!(
                 "too many tokens ({} > {MAX_TOKENS})",
@@ -55,8 +55,8 @@ impl AgentId {
         &self.raw
     }
 
-    /// The JetStream filter subject for this agent, e.g. `agent.events.coding.main`.
-    /// Identity: the id is already dot-separated (ADR-0004).
+    /// The JetStream filter subject for this agent, e.g. `agent.events.coding_main`.
+    /// Identity: prefix only — the id is a single NATS token (ADR-0006).
     pub fn subject(&self) -> String {
         let raw = &self.raw;
         format!("{SUBJECT_PREFIX}.{raw}")
@@ -99,7 +99,7 @@ fn validate_token(token: &str) -> Result<(), AgentdError> {
         )));
     }
     for c in chars {
-        if !(c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-') {
+        if !(c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
             return Err(AgentdError::invalid_agent_id(format!(
                 "token {token:?}: character {c:?} not allowed"
             )));
@@ -115,9 +115,9 @@ mod tests {
 
     #[test]
     fn parses_and_encodes_subject() {
-        let id = AgentId::parse("coding.main").unwrap();
-        assert_eq!(id.subject(), "agent.events.coding.main");
-        assert_eq!(id.to_string(), "coding.main");
+        let id = AgentId::parse("coding_main").unwrap();
+        assert_eq!(id.subject(), "agent.events.coding_main");
+        assert_eq!(id.to_string(), "coding_main");
 
         let id = AgentId::parse("a").unwrap();
         assert_eq!(id.subject(), "agent.events.a");
@@ -125,12 +125,7 @@ mod tests {
 
     #[test]
     fn accepts_multi_token_and_allowed_characters() {
-        for s in [
-            "assistant.personal",
-            "research.market",
-            "a-b_c.0123-x",
-            "z9",
-        ] {
+        for s in ["assistant_personal", "research_market", "a-b_c-0123x", "z9"] {
             assert!(AgentId::parse(s).is_ok(), "should accept {s:?}");
         }
     }
@@ -139,15 +134,17 @@ mod tests {
     fn rejects_invalid_forms() {
         for s in [
             "",              // empty
-            ".a",            // leading dot → empty first token
-            "a.",            // trailing dot → empty last token
-            "a..b",          // empty middle token
-            "Coding.main",   // uppercase
-            "-abc.x",        // invalid first character
-            "_abc",          // invalid first character
-            "a/b.c",         // '/' not in grammar (id must be dot-separated, ADR-0004)
+            "_a",            // leading underscore → empty first token
+            "a_",            // trailing underscore → empty last token
+            "a__b",          // empty middle token
+            "Coding_main",   // uppercase
+            "-abc_x",        // invalid first character
+            "a.b",           // '.' not in grammar (ADR-0006: underscore-separated)
+            "a/b",           // '/' not in grammar
+            "a.b_c",         // '.' still banned alongside the separator
             "a b",           // whitespace
-            "a.b c",         // whitespace in later token
+            "a_b c",         // whitespace in later token
+            "a.b-c",         // '.' not in grammar
             &"x".repeat(64), // token too long
         ] {
             assert!(AgentId::parse(s).is_err(), "should reject {s:?}");
@@ -156,15 +153,15 @@ mod tests {
 
     #[test]
     fn rejects_too_many_tokens() {
-        let id = vec!["s"; MAX_TOKENS + 1].join(".");
+        let id = vec!["s"; MAX_TOKENS + 1].join("_");
         assert!(AgentId::parse(&id).is_err());
     }
 
     #[test]
     fn serde_roundtrip() {
-        let id = AgentId::parse("coding.main").unwrap();
+        let id = AgentId::parse("coding_main").unwrap();
         let json = serde_json::to_string(&id).unwrap();
-        assert_eq!(json, "\"coding.main\"");
+        assert_eq!(json, "\"coding_main\"");
         let back: AgentId = serde_json::from_str(&json).unwrap();
         assert_eq!(back, id);
         assert!(serde_json::from_str::<AgentId>("\"bad id\"").is_err());
@@ -183,14 +180,14 @@ mod tests {
             prop_assert_eq!(
                 subject.strip_prefix("agent.events.").unwrap(),
                 id.as_str(),
-                "identity: subject must equal id (ADR-0004)"
+                "identity: subject must equal id (ADR-0006)"
             );
         }
     }
 
-    /// Generates ids matching the grammar: [a-z0-9][a-z0-9_-]{0,62} tokens
-    /// joined by '.'. Index space avoids regex dependencies.
-    const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789_-";
+    /// Generates ids matching the grammar: [a-z0-9][a-z0-9-]{0,62} tokens
+    /// joined by '_'. Index space avoids regex dependencies.
+    const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789-";
     const ALNUM_COUNT: usize = 36;
 
     fn valid_token() -> impl proptest::prelude::Strategy<Value = String> {
@@ -211,6 +208,6 @@ mod tests {
 
     fn valid_agent_id() -> impl proptest::prelude::Strategy<Value = String> {
         use proptest::prelude::*;
-        proptest::collection::vec(valid_token(), 1..4).prop_map(|toks| toks.join("."))
+        proptest::collection::vec(valid_token(), 1..4).prop_map(|toks| toks.join("_"))
     }
 }
