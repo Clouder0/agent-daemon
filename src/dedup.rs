@@ -96,7 +96,9 @@ impl DedupStore {
     /// calls this after the handler exits and before the final double ack
     /// (§10.2, §10.5).
     pub fn mark_completed(&self, agent_id: &AgentId, event_id: &str) -> Result<(), AgentdError> {
-        let now = unix_now();
+        // SQLite integers are i64; bind as i64 (rusqlite ≥0.40 drops the
+        // fallible u64 ToSql).
+        let now = unix_now() as i64;
         let conn = self.conn.lock().expect("dedup store lock poisoned");
         conn.execute(
             "INSERT OR IGNORE INTO completed_events (agent_id, event_id, completed_at)
@@ -110,7 +112,7 @@ impl DedupStore {
     /// Delete rows older than `ttl`; returns the number purged. Run at
     /// startup (`open`); the run loop (#2) will call it periodically.
     pub fn purge_expired(&self, ttl: Duration) -> Result<u64, AgentdError> {
-        let cutoff = unix_now().saturating_sub(ttl.as_secs());
+        let cutoff = unix_now().saturating_sub(ttl.as_secs()) as i64;
         let conn = self.conn.lock().expect("dedup store lock poisoned");
         let purged = conn
             .execute(
