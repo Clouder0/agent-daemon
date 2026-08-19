@@ -45,14 +45,15 @@ pub(crate) fn build_filter(
         .map_err(|e| AgentdError::config(format!("invalid log_level filter {config_level:?}: {e}")))
 }
 
-/// Redact any `user:pass@` userinfo so URLs with embedded credentials can
-/// never reach the log output (§12.2). Credential-bearing URLs should not be
-/// used with `agentd` at all — this is defense in depth for the log surface.
+/// Redact any `userinfo@` up to the first `/` (or end), so URLs with embedded
+/// credentials can never reach the log output (§12.2) — with or without a
+/// `://` scheme marker. Credential-bearing URLs should not be used with
+/// `agentd` at all; this is defense in depth for the log surface.
 pub(crate) fn redact_url(url: &str) -> String {
-    let Some(scheme_end) = url.find("://") else {
-        return url.to_owned();
+    let authority_start = match url.find("://") {
+        Some(scheme_end) => scheme_end + 3,
+        None => 0,
     };
-    let authority_start = scheme_end + 3;
     let authority_end = url[authority_start..]
         .find('/')
         .map_or(url.len(), |i| authority_start + i);
@@ -324,6 +325,16 @@ mod tests {
             "nats://relay.internal:4222"
         );
         assert_eq!(redact_url("relay.internal:4222"), "relay.internal:4222");
+        assert_eq!(
+            redact_url("plain host, no userinfo"),
+            "plain host, no userinfo"
+        );
+        assert_eq!(
+            redact_url("user:pass@relay:4222"),
+            "***@relay:4222",
+            "scheme-less userinfo must be redacted too"
+        );
+        assert_eq!(redact_url("user:pass@relay:4222/js"), "***@relay:4222/js");
     }
 
     #[test]
