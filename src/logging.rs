@@ -84,11 +84,13 @@ pub fn dispatch_span(
     )
 }
 
-/// The per-handler span: the dispatcher keeps it entered for the handler's
-/// entire lifetime so spawn/exit events correlate `handler_path` and
-/// `handler_pid` on every line (§16), even under concurrent dispatch.
-pub fn handler_span(handler_path: &str, handler_pid: u32) -> tracing::Span {
-    tracing::info_span!("handler", handler_path, handler_pid)
+/// The per-handler span, created as a child of the dispatch span so every
+/// handler-lifecycle line inherits the full context chain (`dispatch >
+/// handler`): agent_id/event_id/consumer/sequence *and* handler_path/pid
+/// (§16). Parentage, not sequential enters — a span's scope follows its
+/// parent chain.
+pub fn handler_span(parent: &tracing::Span, handler_path: &str, handler_pid: u32) -> tracing::Span {
+    tracing::info_span!(parent: parent.id(), "handler", handler_path, handler_pid)
 }
 
 /// One helper per whitepaper §16 must-log event. Emission is wired by the
@@ -343,9 +345,8 @@ mod tests {
         let dispatch = tracing::Dispatch::new(tracing_subscriber::registry().with(capture.clone()));
         tracing::dispatcher::with_default(&dispatch, || {
             let agent = AgentId::parse("coding.main").unwrap();
-            let dispatch = dispatch_span(&agent, "ev-9", "agent-abc", 7);
-            let _dispatch_guard = dispatch.enter();
-            let handler = handler_span("/bin/on-event", 99);
+            let parent = dispatch_span(&agent, "ev-9", "agent-abc", 7);
+            let handler = handler_span(&parent, "/bin/on-event", 99);
             let _handler_guard = handler.enter();
             events::handler_exited(0, 5);
         });
@@ -354,6 +355,10 @@ mod tests {
         assert!(
             lines[0].contains("handler[handler_path=/bin/on-event,handler_pid=99]"),
             "handler span fields missing: {lines:?}"
+        );
+        assert!(
+            lines[0].contains("dispatch[agent_id=coding.main,event_id=ev-9"),
+            "handler span must be a child of dispatch (full context chain, §16): {lines:?}"
         );
         assert!(lines[0].contains("exit_status=0"), "{lines:?}");
     }
