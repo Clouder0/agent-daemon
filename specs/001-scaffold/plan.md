@@ -1,6 +1,6 @@
 # Plan 001 — Repository scaffold
 
-- **Status:** Done (initial commit on local `main`; remaining items are GitHub-go gated)
+- **Status:** Done — including the publish step (repo live at github.com/Clouder0/agent-daemon; see tasks.md)
 - **Issue:** to be filed as #1 when the GitHub repository is created
 
 ## Goal and completion
@@ -36,5 +36,6 @@ File-by-file layout, exact CI YAML, module skeletons, test cases — all agent-d
 
 ## Current state / handoff
 
-- Steps 1–6 complete; see `tasks.md`.
-- Known deviation: GitHub repo URL in `Cargo.toml` assumes `Clouder0/agent-daemon` — verify when the repository is created.
+- All steps complete, including publish: repo live, CI green on `main`, branch protection on, v0.1.0 milestone seeded (issues #2–#10).
+- Post-publish deviations, all verified green: PR #12 fixed the cargo-deny-action invocation (`command` input, not `arguments`); Dependabot PRs #8 (toml 1.x) and #11 (actions bumps) merged.
+- Known deviation: GitHub repo URL in `Cargo.toml` assumed `Clouder0/agent-daemon` — confirmed correct at publish time.
