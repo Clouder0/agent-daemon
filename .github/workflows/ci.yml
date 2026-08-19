@@ -52,7 +52,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
-          arguments: advisories licenses
+          command: check advisories licenses bans sources
 
   # E2E tests against a real nats-server (JetStream) land with the relay
   # implementation (see whitepaper §21.2). The job skeleton is kept here so
