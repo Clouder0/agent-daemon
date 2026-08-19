@@ -567,3 +567,77 @@ async fn mark_completed_written_before_ack() {
     assert_eq!(f.acker.acks(), 2);
     f.cleanup();
 }
+
+/// Regression (review of #22): handler-lifecycle lines must carry BOTH spans
+/// — dispatch (agent_id/event_id/consumer/sequence) nested around handler
+/// (path/pid) — or the lines lose §16 correlation.
+#[test]
+fn handler_lines_carry_dispatch_context() {
+    use std::sync::Mutex;
+    use tracing_subscriber::layer::Context as LayerContext;
+    use tracing_subscriber::layer::Layer;
+    use tracing_subscriber::prelude::*;
+
+    #[derive(Clone, Default)]
+    struct Capture(Arc<Mutex<Vec<(String, String)>>>); // (span scope, message)
+
+    struct Msg(String);
+    impl tracing::field::Visit for Msg {
+        fn record_debug(&mut self, f: &tracing::field::Field, v: &dyn std::fmt::Debug) {
+            if f.name() == "message" {
+                self.0 = format!("{v:?}");
+            }
+        }
+    }
+
+    struct Cap(Capture);
+    impl<S> Layer<S> for Cap
+    where
+        S: tracing::Subscriber + for<'l> tracing_subscriber::registry::LookupSpan<'l>,
+    {
+        fn on_event(&self, event: &tracing::Event<'_>, ctx: LayerContext<'_, S>) {
+            let scope: Vec<String> = ctx
+                .event_scope(event)
+                .map(|spans| spans.map(|s| s.name().to_string()).collect())
+                .unwrap_or_default();
+            let mut m = Msg(String::new());
+            event.record(&mut m);
+            self.0.0.lock().unwrap().push((scope.join(">"), m.0));
+        }
+    }
+
+    let f = Fixture::new("spans", r#"exit 0"#, 1);
+    let capture = Capture::default();
+    let dispatch =
+        tracing::Dispatch::new(tracing_subscriber::registry().with(Cap(capture.clone())));
+    let del = f.delivery("e-spans");
+    let disp = f.dispatcher.clone();
+
+    // Current-thread runtime inside with_default so the thread-local
+    // dispatcher covers every await of dispatch().
+    tracing::dispatcher::with_default(&dispatch, || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async move {
+                disp.dispatch(del).await;
+            })
+    });
+
+    let lines = capture.0.lock().unwrap();
+    for (scope, msg) in lines.iter() {
+        if msg.contains("handler spawned") || msg.contains("handler exited") {
+            // event_scope walks innermost-first: handler, then its parent.
+            assert_eq!(
+                scope, "handler>dispatch",
+                "{msg} must carry both spans for §16 correlation, got scope {scope:?}"
+            );
+        }
+    }
+    assert!(
+        lines.iter().any(|(_, m)| m.contains("handler exited")),
+        "expected a handler-exited line, got {lines:?}"
+    );
+    f.cleanup();
+}

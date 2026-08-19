@@ -205,6 +205,8 @@ impl Dispatcher {
                 }
                 if let Err(e) = acker.ack().await {
                     events::ack_failure(&e);
+                } else {
+                    events::ack_success();
                 }
                 return;
             }
@@ -260,9 +262,11 @@ impl Dispatcher {
             }
         };
         let pid = child.id().unwrap_or(0);
-        let handler_span = logging::handler_span(&handler_path, pid);
+        // Child of the dispatch span: entering it yields the full
+        // `dispatch > handler` context chain on every lifecycle line (§16).
+        let handler_span = logging::handler_span(&dispatch_span, &handler_path, pid);
         {
-            let _g = handler_span.enter();
+            let _h = handler_span.enter();
             events::handler_spawned(&handler_path, pid);
         }
 
@@ -287,7 +291,7 @@ impl Dispatcher {
             }
         };
         {
-            let _g = handler_span.enter();
+            let _h = handler_span.enter();
             events::handler_exited(exit_status, duration_ms);
         }
         if started.elapsed() > self.slow_handler_warn {
