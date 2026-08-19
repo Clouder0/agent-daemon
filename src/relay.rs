@@ -87,7 +87,10 @@ pub fn jetstream_context(client: &async_nats::Client) -> Context {
 /// connect retries so the daemon survives a relay that is not up yet
 /// (§15.1). Connection lifecycle events (disconnect/reconnect) are logged
 /// per §16.
-pub async fn connect(config: &DaemonConfig) -> Result<async_nats::Client, AgentdError> {
+pub async fn connect(
+    config: &DaemonConfig,
+    nats_connected: Arc<std::sync::atomic::AtomicBool>,
+) -> Result<async_nats::Client, AgentdError> {
     let options = match &config.nats_creds {
         Some(creds) => async_nats::ConnectOptions::with_credentials_file(creds.clone())
             .await
@@ -103,11 +106,18 @@ pub async fn connect(config: &DaemonConfig) -> Result<async_nats::Client, Agentd
     let event_url = config.nats_url.clone();
     let options = options.event_callback(move |event| {
         let url = event_url.clone();
+        let connected = nats_connected.clone();
         async move {
             match event {
                 // Reconnects surface as a fresh `Connected`.
-                async_nats::Event::Connected => events::nats_connected(&url),
-                async_nats::Event::Disconnected => events::nats_disconnected(),
+                async_nats::Event::Connected => {
+                    connected.store(true, std::sync::atomic::Ordering::Relaxed);
+                    events::nats_connected(&url)
+                }
+                async_nats::Event::Disconnected => {
+                    connected.store(false, std::sync::atomic::Ordering::Relaxed);
+                    events::nats_disconnected()
+                }
                 async_nats::Event::LameDuckMode => {
                     tracing::warn!("relay entered lame duck mode")
                 }
@@ -274,6 +284,15 @@ impl Relay {
         }
     }
 
+    /// Best-effort consumer backlog: (num_pending, num_ack_pending).
+    /// None when the stream/consumer query fails (relay down, agent not
+    /// yet bound) — status stays available.
+    pub async fn consumer_backlog(&self, id: &AgentId) -> Option<(u64, u64)> {
+        let stream = self.js.get_stream(&self.stream_name).await.ok()?;
+        let info = stream.consumer_info(&consumer_name(id)).await.ok()?;
+        Some((info.num_pending as u64, info.num_ack_pending as u64))
+    }
+
     fn stop_pull(&self, id: &AgentId) {
         if let Some(handle) = self.pulls.lock().expect("relay pulls poisoned").remove(id) {
             handle.abort();
@@ -283,7 +302,7 @@ impl Relay {
     /// Graceful shutdown (§14.3): stop pulling, wait for all in-flight
     /// dispatches (which include their acks), then return. Never kills
     /// handlers; systemd's TimeoutStopSec is the backstop.
-    pub async fn shutdown(self) {
+    pub async fn shutdown(&self) {
         let handles: Vec<JoinHandle<()>> = {
             let mut pulls = self.pulls.lock().expect("relay pulls poisoned");
             pulls.drain().map(|(_, h)| h).collect()
@@ -293,6 +312,21 @@ impl Relay {
         }
         let mut tasks = self.dispatch_tasks.lock().await;
         while tasks.join_next().await.is_some() {}
+    }
+}
+
+/// Control-plane view of the relay: apply registry changes and read consumer
+/// backlog (`DaemonHandle` consumes this; tests fake it).
+impl crate::control::RelayBackend for Relay {
+    fn apply_changes(
+        &self,
+        changes: &[Change],
+    ) -> impl Future<Output = Result<(), AgentdError>> + Send {
+        Relay::apply_changes(self, changes)
+    }
+
+    fn consumer_backlog(&self, id: &AgentId) -> impl Future<Output = Option<(u64, u64)>> + Send {
+        Relay::consumer_backlog(self, id)
     }
 }
 

@@ -320,6 +320,16 @@ impl Dispatcher {
         // Step 13: permit released by drop.
     }
 
+    /// In-flight dispatches for one agent (status/diagnostics).
+    pub fn in_flight(&self, agent: &AgentId) -> usize {
+        self.states
+            .lock()
+            .expect("dispatcher states poisoned")
+            .get(agent)
+            .map(|s| s.in_flight.len())
+            .unwrap_or(0)
+    }
+
     fn ensure_state(&self, agent: &AgentId, max_concurrency: u32) -> Arc<Semaphore> {
         let mut states = self.states.lock().expect("dispatcher states poisoned");
         states

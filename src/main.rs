@@ -6,11 +6,13 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use clap::Parser;
 
 use agent_daemon::config::DaemonConfig;
+use agent_daemon::control::{self, DaemonHandle};
 use agent_daemon::dedup::DedupStore;
 use agent_daemon::dispatcher::Dispatcher;
 use agent_daemon::registry::Registry;
@@ -88,8 +90,9 @@ async fn run(config_path: Option<PathBuf>) -> ExitCode {
     ));
 
     // Connect (retries until the relay is reachable — §15.1) and bind
-    // per-agent consumers.
-    let client = match relay::connect(&config).await {
+    // per-agent consumers. The connected flag feeds `agentdctl status`.
+    let nats_connected = Arc::new(AtomicBool::new(false));
+    let client = match relay::connect(&config, nats_connected.clone()).await {
         Ok(c) => c,
         Err(e) => {
             tracing::error!("relay connection failed: {e}");
@@ -97,17 +100,34 @@ async fn run(config_path: Option<PathBuf>) -> ExitCode {
         }
     };
     let js = relay::jetstream_context(&client);
-    let relay = Relay::new(
+    let relay = Arc::new(Relay::new(
         js,
         config.stream_name.clone(),
         registry.clone(),
         dispatcher.clone(),
         Duration::from_secs(config.ack_wait_secs),
         Duration::from_secs(config.ack_progress_interval_secs),
-    );
+    ));
     if let Err(e) = relay.sync_consumers().await {
         tracing::error!("consumer sync failed: {e}");
     }
+
+    // Control socket (§7.3/§18): SIGHUP and agentdctl share one apply path.
+    let handle = Arc::new(DaemonHandle::new(
+        registry.clone(),
+        dispatcher.clone(),
+        relay.clone(),
+        nats_connected,
+    ));
+    let socket_path = control::socket_path(&config);
+    let listener = match control::bind(&socket_path) {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::error!("cannot bind control socket: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    tokio::spawn(control::serve(handle.clone(), listener));
 
     // SIGHUP → reload agents.d and apply the diff; SIGTERM/Ctrl-C → graceful
     // shutdown (§14.3): stop pulling, let in-flight handlers finish and ack.
@@ -127,29 +147,29 @@ async fn run(config_path: Option<PathBuf>) -> ExitCode {
         }
     };
 
-    tracing::info!(agents = registry.snapshot().len(), "agentd running");
+    tracing::info!(
+        agents = registry.snapshot().len(),
+        control_socket = %socket_path.display(),
+        "agentd running"
+    );
     loop {
         tokio::select! {
             _ = sighup.recv() => {
-                match registry.reload() {
-                    Ok(changes) => {
-                        dispatcher.apply_changes(&changes);
-                        if let Err(e) = relay.apply_changes(&changes).await {
-                            tracing::error!("applying registry changes failed: {e}");
-                        }
-                    }
-                    Err(e) => tracing::error!("reload failed; keeping previous registry: {e}"),
+                if let Err(e) = handle.reload().await {
+                    tracing::error!("reload failed; keeping previous registry: {e}");
                 }
             }
             _ = sigterm.recv() => {
                 tracing::info!("SIGTERM: draining in-flight handlers (§14.3)");
                 relay.shutdown().await;
+                let _ = std::fs::remove_file(&socket_path);
                 tracing::info!("agentd stopped");
                 return ExitCode::SUCCESS;
             }
             _ = tokio::signal::ctrl_c() => {
                 tracing::info!("Ctrl-C: draining in-flight handlers (§14.3)");
                 relay.shutdown().await;
+                let _ = std::fs::remove_file(&socket_path);
                 tracing::info!("agentd stopped");
                 return ExitCode::SUCCESS;
             }
