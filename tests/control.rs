@@ -256,3 +256,54 @@ async fn malformed_request_returns_error_not_disconnect() {
     assert!(parsed.error.unwrap().contains("malformed request"));
     f.cleanup();
 }
+
+#[tokio::test]
+async fn stale_socket_file_is_replaced_at_bind() {
+    let f = Fixture::new("stale");
+    // Simulate a leftover from a crash: a plain file (or garbage) where the
+    // socket should be. The next bind must replace it and still serve.
+    drop(f);
+    let dir = std::env::temp_dir().join(format!(
+        "agentd-ctl-stale2-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(dir.join("agents.d")).unwrap();
+    let socket = dir.join("control.sock");
+    std::fs::write(&socket, b"leftover garbage").unwrap();
+
+    let registry = Arc::new(Registry::load(&dir.join("agents.d")).unwrap());
+    let dispatcher = Arc::new(Dispatcher::new(
+        registry.clone(),
+        Arc::new(agent_daemon::dedup::DedupStore::open_in_memory().unwrap()),
+        std::time::Duration::from_secs(3600),
+        256 * 1024,
+    ));
+    let handle = Arc::new(DaemonHandle::new(
+        registry,
+        dispatcher,
+        Arc::new(FakeBackend::default()),
+        Arc::new(AtomicBool::new(true)),
+    ));
+    let listener = control::bind(&socket).expect("bind over stale file");
+    tokio::spawn(control::serve(handle, listener));
+
+    let mut stream = tokio::net::UnixStream::connect(&socket).await.unwrap();
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+    let mut line = serde_json::to_string(&Request::List).unwrap();
+    line.push('\n');
+    stream.write_all(line.as_bytes()).await.unwrap();
+    stream.flush().await.unwrap();
+    let mut response = String::new();
+    let mut reader = tokio::io::BufReader::new(stream);
+    reader.read_line(&mut response).await.unwrap();
+    let parsed: Response = serde_json::from_str(&response).unwrap();
+    assert!(
+        parsed.ok,
+        "serves after replacing the stale file: {parsed:?}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
