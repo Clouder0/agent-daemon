@@ -374,6 +374,7 @@ async fn status(cli: &Cli) -> ExitCode {
 }
 
 fn print_status(status: &StatusReport) {
+    println!("daemon: v{}", status.daemon_version);
     println!(
         "nats: {}",
         if status.nats_connected {

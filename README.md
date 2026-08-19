@@ -19,20 +19,37 @@ Agent-owned Handler                  ← all agent policy: auth, wake, queue, st
 Agent Runtime                        ← understands the event, decides what to do
 ```
 
-`agentd` is deliberately mechanism-only: no LLM clients, no agent loop, no context management, no retries, no sender verification. Everything agent-specific lives in a handler executable each agent registers. An `agent_id` (dot-separated, e.g. `coding_main`) is a routing name decoupled from process liveness — which is what makes agent sleep, migration, and self-replacement (a new generation updating its own handler binding) first-class.
+`agentd` is deliberately mechanism-only: no LLM clients, no agent loop, no context management, no retries, no sender verification. Everything agent-specific lives in a handler executable each agent registers. An `agent_id` (underscore-separated, e.g. `coding_main`) is a routing name decoupled from process liveness — which is what makes agent sleep, migration, and self-replacement (a new generation updating its own handler binding) first-class.
 
-**Status:** pre-alpha, building in public. The v0 specification is [`docs/whitepaper-v0.md`](docs/whitepaper-v0.md).
+**Status:** v0.1 feature-complete; building in public. The v0 specification is [`docs/whitepaper-v0.md`](docs/whitepaper-v0.md).
 
-## Features (v0 target)
+## Quickstart
+
+```bash
+# Relay (once per domain): a NATS server with JetStream, then the stream:
+agentdctl init
+
+# Run the daemon (foreground; see ops guide for a systemd unit):
+agentd run
+
+# An agent receives events in three steps (full guide: docs/agent-guide.md):
+printf '#!/bin/sh\ncat > /tmp/last-event.json\n' > ~/agents/my/on-event
+chmod +x ~/agents/my/on-event
+agentdctl register --id my_agent --handler ~/agents/my/on-event
+# publish an envelope to agent.events.my_agent — the handler runs.
+```
+
+## Features
 
 - One long-running daemon per machine hosting many agents (ids like `coding_main`)
 - Durable offline delivery via NATS JetStream (per-agent durable pull consumers)
-- Dispatch = execute the registered handler with the event JSON on stdin
+- Dispatch = execute the registered handler with the original event JSON on stdin
 - Serial per agent by default; configurable concurrency
 - No retry on handler exit code; terminal handling of poison events
 - Best-effort effectively-once dispatch (completed-event dedup + in-flight redelivery guard)
-- Dynamic registration via local control socket and `agentdctl`
-- Structured logging; graceful shutdown
+- Dynamic registration via local control socket and `agentdctl` (register-while-running dispatches immediately)
+- Self-evolution: an agent swaps its own handler with no daemon restart
+- Structured logging; graceful shutdown (in-flight handlers drain, never killed)
 
 Explicit non-goals for v0 are listed in the whitepaper (§23).
 
@@ -50,6 +67,9 @@ Release artifacts are produced by CI (`cargo-zigbuild`) for `x86_64`/`aarch64` �
 
 ## Documentation
 
+- [Agent guide — for Agents using agentd](docs/agent-guide.md)
+- [Envelope JSON Schema (v1)](docs/envelope.schema.json)
+- [Ops guide — for humans operating the daemon](docs/ops-guide.md)
 - [Whitepaper v0 (specification, source of truth)](docs/whitepaper-v0.md)
 - [Architecture decision records](docs/adr/)
 - [Per-issue specs and plans](specs/)

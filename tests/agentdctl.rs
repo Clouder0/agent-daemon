@@ -155,6 +155,7 @@ async fn status_shape() {
     let out = f.ctl(&["status"]).await;
     assert!(out.status.success());
     let status = stdout(&out);
+    assert!(status.contains("daemon: v"), "{status}");
     assert!(status.contains("nats: connected"), "{status}");
     assert!(status.contains("t_one"), "{status}");
     assert!(status.contains("0"), "in_flight column present: {status}");

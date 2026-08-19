@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Clouder0/agent-daemon/docs/envelope.schema.json",
+  "title": "agentd Event Envelope v1",
+  "description": "Machine-usable schema for events published to agent.events.<agent_id>. agentd interprets only version, event_id and agent_id; every other field passes through to the handler unchanged, and unknown fields are accepted (forward compatibility).",
+  "type": "object",
+  "required": ["version", "event_id", "agent_id", "type", "created_at", "payload"],
+  "additionalProperties": true,
+  "properties": {
+    "version": {
+      "const": 1,
+      "description": "Envelope version. Only 1 is accepted; any other value is terminally dropped."
+    },
+    "event_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Globally unique, stable identifier (UUIDv7 / ULID recommended). Used for best-effort deduplication; encodes no ordering."
+    },
+    "agent_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,62}(_[a-z0-9][a-z0-9-]{0,62})*$",
+      "maxLength": 1024,
+      "description": "Target agent. Underscore-separated tokens; also the subject tail (agent.events.<agent_id>), consumer name (agent-<agent_id>) and config filename (<agent_id>.toml)."
+    },
+    "type": {
+      "type": "string",
+      "description": "Event type hint (e.g. im.message, ci.completed). agentd does not interpret it."
+    },
+    "created_at": {
+      "type": "string",
+      "description": "RFC 3339 UTC timestamp from the sender. agentd does not interpret it."
+    },
+    "payload": {
+      "description": "Any JSON value. Passed through unmodified; total envelope size capped by max_event_bytes (default 256 KiB)."
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Optional pass-through object: sender claims, signatures, reply targets, trace context. Handlers own all interpretation."
+    }
+  }
+}
