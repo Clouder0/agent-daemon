@@ -84,6 +84,16 @@ impl DaemonConfig {
         }
         Ok(())
     }
+
+    /// The agents directory, honoring `$XDG_CONFIG_HOME` when unset
+    /// (whitepaper §7.4). Used by the registry; config stays an `Option`
+    /// so the file format and defaults are distinct.
+    pub fn resolved_agents_dir(&self) -> std::path::PathBuf {
+        self.agents_dir.clone().unwrap_or_else(|| {
+            let base = dirs::config_dir().unwrap_or_default();
+            base.join("agentd").join("agents.d")
+        })
+    }
 }
 
 #[cfg(test)]
@@ -123,6 +133,27 @@ mod tests {
     fn unknown_keys_are_rejected() {
         let raw = "nats_urk = \"typo\"";
         assert!(toml::from_str::<DaemonConfig>(raw).is_err());
+    }
+
+    #[test]
+    fn agents_dir_resolves_explicit_or_xdg_default() {
+        // explicit value wins
+        let explicit = DaemonConfig {
+            agents_dir: Some(std::path::PathBuf::from("/opt/agents.d")),
+            ..DaemonConfig::default()
+        };
+        assert_eq!(
+            explicit.resolved_agents_dir(),
+            std::path::PathBuf::from("/opt/agents.d")
+        );
+
+        // unset → $XDG_CONFIG_HOME/agentd/agents.d (via dirs)
+        let unset = DaemonConfig::default();
+        let resolved = unset.resolved_agents_dir();
+        assert!(
+            resolved.ends_with("agentd/agents.d"),
+            "expected an agentd/agents.d suffix, got {resolved:?}"
+        );
     }
 
     #[test]

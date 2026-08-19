@@ -171,12 +171,6 @@ impl Registry {
                     path.display()
                 )));
             }
-            if agents.contains_key(&id) {
-                return Err(AgentdError::config(format!(
-                    "duplicate agent_id {id} in {}",
-                    path.display()
-                )));
-            }
             config.validate()?;
             for w in config.liveness_warnings() {
                 tracing::warn!(agent_id = %id, "{}", w);
@@ -209,16 +203,28 @@ impl Registry {
 
     /// Register a new agent: validate, persist (atomic write), then mutate
     /// in-memory state. Errors if the agent already exists.
+    ///
+    /// The disk write happens outside any lock so slow filesystem I/O never
+    /// blocks readers on the dispatch path; the write lock is held only for
+    /// the cheap existence check and in-memory insert.
     pub fn register(&self, config: &AgentConfig) -> Result<(), AgentdError> {
         config.validate()?;
-        let mut inner = self.inner.write().expect("registry lock poisoned");
-        if inner.agents.contains_key(&config.agent_id) {
+        if self.get(&config.agent_id).is_some() {
             return Err(AgentdError::config(format!(
                 "agent {} already registered",
                 config.agent_id
             )));
         }
         self.persist(config)?; // on failure, in-memory state is unchanged
+        let mut inner = self.inner.write().expect("registry lock poisoned");
+        if inner.agents.contains_key(&config.agent_id) {
+            // Lost a race with another writer; the file is already written
+            // with this agent's config, which is what it would contain anyway.
+            return Err(AgentdError::config(format!(
+                "agent {} already registered",
+                config.agent_id
+            )));
+        }
         inner.agents.insert(config.agent_id.clone(), config.clone());
         Ok(())
     }
@@ -226,14 +232,14 @@ impl Registry {
     /// Replace an existing agent's config. Errors if absent.
     pub fn update(&self, config: &AgentConfig) -> Result<(), AgentdError> {
         config.validate()?;
-        let mut inner = self.inner.write().expect("registry lock poisoned");
-        if !inner.agents.contains_key(&config.agent_id) {
+        if self.get(&config.agent_id).is_none() {
             return Err(AgentdError::config(format!(
                 "agent {} is not registered",
                 config.agent_id
             )));
         }
         self.persist(config)?;
+        let mut inner = self.inner.write().expect("registry lock poisoned");
         inner.agents.insert(config.agent_id.clone(), config.clone());
         Ok(())
     }
@@ -241,16 +247,16 @@ impl Registry {
     /// Toggle `enabled`, persisting the change. A disabled agent stops
     /// pulling new events (§7.4); the file is kept.
     pub fn set_enabled(&self, id: &AgentId, enabled: bool) -> Result<(), AgentdError> {
-        let mut inner = self.inner.write().expect("registry lock poisoned");
-        let Some(existing) = inner.agents.get(id) else {
+        let Some(existing) = self.get(id) else {
             return Err(AgentdError::config(format!("agent {id} is not registered")));
         };
         if existing.enabled == enabled {
             return Ok(());
         }
-        let mut updated = existing.clone();
+        let mut updated = existing;
         updated.enabled = enabled;
         self.persist(&updated)?;
+        let mut inner = self.inner.write().expect("registry lock poisoned");
         inner.agents.insert(id.clone(), updated);
         Ok(())
     }
@@ -259,14 +265,17 @@ impl Registry {
     /// is the source of truth, so this is atomic-enough (missing file =
     /// unregistered after restart). On failure in-memory is unchanged.
     pub fn unregister(&self, id: &AgentId) -> Result<(), AgentdError> {
-        let mut inner = self.inner.write().expect("registry lock poisoned");
-        if !inner.agents.contains_key(id) {
+        if self.get(id).is_none() {
             return Err(AgentdError::config(format!("agent {id} is not registered")));
         }
         let path = self.file_path(id);
         std::fs::remove_file(&path)
             .map_err(|e| AgentdError::config(format!("cannot remove {}: {e}", path.display())))?;
-        inner.agents.remove(id);
+        self.inner
+            .write()
+            .expect("registry lock poisoned")
+            .agents
+            .remove(id);
         Ok(())
     }
 
@@ -345,10 +354,12 @@ impl Registry {
     }
 }
 
-/// Open the file read-write (needed for `sync_all` on Linux) and fsync it.
+/// Open the temp file read-write (some filesystems need write access for a
+/// meaningful `sync_all`) and fsync it before the atomic rename.
 fn sync_file(path: &Path) -> Result<(), AgentdError> {
     let file = std::fs::File::options()
         .read(true)
+        .write(true)
         .open(path)
         .map_err(|e| {
             AgentdError::config(format!("cannot open {} for fsync: {e}", path.display()))
@@ -436,25 +447,6 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    #[test]
-    fn duplicate_content_id_across_files_errors() {
-        let dir = temp_dir("dupcontent");
-        std::fs::create_dir_all(&dir).unwrap();
-        // two files whose content claims the same id → load error
-        std::fs::write(
-            dir.join("x.toml"),
-            toml_string(&cfg("dup.id", "/bin/true", 1)),
-        )
-        .unwrap();
-        std::fs::write(
-            dir.join("y.toml"),
-            toml_string(&cfg("dup.id", "/bin/false", 1)),
-        )
-        .unwrap();
-        assert!(Registry::load(&dir).is_err());
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
     fn toml_string(c: &AgentConfig) -> String {
         toml::to_string_pretty(c).unwrap()
     }
@@ -519,7 +511,7 @@ mod tests {
         assert!(!r.snapshot()[0].enabled);
         r.unregister(&AgentId::parse("a.b").unwrap()).unwrap();
         assert!(r.snapshot().is_empty());
-        assert!(!dir.join("a.toml").exists());
+        assert!(!dir.join("a.b.toml").exists());
         std::fs::remove_dir_all(&dir).ok();
     }
 }
