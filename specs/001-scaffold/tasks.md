@@ -1,0 +1,21 @@
+# Tasks 001 — Repository scaffold
+
+- [x] Rename repo directory to `agent-daemon` (old path symlinked for this session)
+- [x] Whitepaper: Chinese original amended (v0.1) → `docs/whitepaper-v0.zh.md` (reference)
+- [x] Whitepaper: English source of truth → `docs/whitepaper-v0.md` (amendments folded in, marked `(v0.1)`)
+- [x] ADR-0001 in-flight redelivery dedup
+- [x] ADR-0002 project naming
+- [x] ADR-0003 build/testing/release strategy
+- [x] AGENTS.md (routing table, guardrails, commands, workflow)
+- [x] README.md, LICENSE (Apache-2.0), CHANGELOG.md
+- [x] Cargo.toml + rust-toolchain.toml + .gitignore
+- [x] justfile (build/lint/test/deny/coverage mirroring CI)
+- [x] cliff.toml, deny.toml
+- [x] .github/workflows/ci.yml (lint, test, coverage, deny + E2E skeleton)
+- [x] .github/workflows/release.yml (zigbuild matrix + SHA256SUMS)
+- [x] .github/dependabot.yml, issue templates, PR template
+- [x] src skeleton: lib.rs, agent_id.rs, event.rs, config.rs, error.rs, main.rs, bin/agentdctl.rs
+- [x] tests/cli.rs smoke tests
+- [x] `cargo build` + `just lint` + `just test` green (19 tests, clippy -D warnings, fmt, cargo-deny)
+- [x] Initial commit on `main` (local only)
+- [ ] Deferred to GitHub-go: create repo, push, file issue #1 back-reference, seed v0.1.0 milestone issues from whitepaper §21/§22

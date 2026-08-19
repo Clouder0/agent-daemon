@@ -1,0 +1,25 @@
+name: Feature
+description: A unit of work that adds or changes behavior
+labels: ["kind/feature"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What & why
+      description: The outcome that must become true, and why it matters. Reference whitepaper sections where applicable.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Observable conditions that define done (behavior under stated conditions — not file lists).
+      placeholder: |
+        - Given …, when …, then …
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes / constraints
+      description: Scope guardrails (whitepaper §23 non-goals), Operating Model constraints, links to related issues or ADRs.

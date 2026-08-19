@@ -1,0 +1,27 @@
+name: Bug
+description: Something behaves contrary to the whitepaper or to intended behavior
+labels: ["kind/bug"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What should have happened
+      description: Cite the whitepaper section or ADR that defines the expected behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction
+      description: Steps, configuration, agent registration, and relevant log output (never include credentials).
+  - type: input
+    id: version
+    attributes:
+      label: agentd version
+      placeholder: "agentd 0.1.0 (target, commit)"

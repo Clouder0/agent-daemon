@@ -1,0 +1,30 @@
+[package]
+name = "agent-daemon"
+version = "0.1.0"
+edition = "2024"
+description = "Edge-side event dispatch daemon for Agent Native Domains: turns NATS JetStream events into local handler invocations"
+license = "Apache-2.0"
+repository = "https://github.com/Clouder0/agent-daemon"
+readme = "README.md"
+keywords = ["agent", "nats", "jetstream", "daemon", "events"]
+categories = ["command-line-utilities"]
+
+# Binaries keep the whitepaper vocabulary: agentd / agentdctl.
+[[bin]]
+name = "agentd"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "sync", "signal", "time", "net"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+
+# Landing with the issues that first use them: async-nats, rusqlite (bundled), dirs.
+
+[dev-dependencies]
+proptest = "1"

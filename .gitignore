@@ -1,0 +1,24 @@
+# Build artifacts
+/target
+
+# Per-issue worktrees (see AGENTS.md)
+/.worktrees/
+
+# Secrets — never commit credentials
+*.creds
+*.jwt
+.env
+
+# Local runtime state
+*.db
+*.db-shm
+*.db-wal
+
+# Coverage output
+lcov.info
+
+# Editors / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
