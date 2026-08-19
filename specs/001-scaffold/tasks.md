@@ -18,4 +18,5 @@
 - [x] tests/cli.rs smoke tests
 - [x] `cargo build` + `just lint` + `just test` green (19 tests, clippy -D warnings, fmt, cargo-deny)
 - [x] Initial commit on `main` (local only)
-- [ ] Deferred to GitHub-go: create repo, push, file issue #1 back-reference, seed v0.1.0 milestone issues from whitepaper §21/§22
+- [x] Published: repo github.com/Clouder0/agent-daemon created and pushed; issue #1 filed; v0.1.0 milestone + seed issues (#2 relay, #3 dispatcher, #4 dedup, #5 registry, #6 control, #7 logging, #9 E2E, #10 docs); labels kind/* + area/*
+- [x] Post-publish fixes: PR #12 (cargo-deny-action `command` input), Dependabot PRs #8/#11 merged; `main` protected (PR + lint/test/coverage/deny, enforce admins)
