@@ -112,9 +112,11 @@ impl DaemonConfig {
         })
     }
 
-    /// The dedup TTL as a `Duration` (from `dedup_ttl_days`).
+    /// The dedup TTL as a `Duration` (from `dedup_ttl_days`). Saturates on
+    /// absurd values rather than wrapping — an over-large TTL degrades to
+    /// "effectively infinite", never to a premature purge.
     pub fn dedup_ttl(&self) -> std::time::Duration {
-        std::time::Duration::from_secs(self.dedup_ttl_days * 24 * 3600)
+        std::time::Duration::from_secs(self.dedup_ttl_days.saturating_mul(24 * 3600))
     }
 }
 
@@ -212,5 +214,12 @@ mod tests {
             c.dedup_ttl(),
             std::time::Duration::from_secs(14 * 24 * 3600)
         );
+        // Absurd values saturate instead of wrapping (a wrapped ttl would
+        // purge prematurely — silently breaking dedup).
+        let absurd = DaemonConfig {
+            dedup_ttl_days: u64::MAX,
+            ..DaemonConfig::default()
+        };
+        assert_eq!(absurd.dedup_ttl(), std::time::Duration::from_secs(u64::MAX));
     }
 }
