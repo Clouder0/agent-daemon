@@ -1095,10 +1095,17 @@ It maintains only a small persistent dispatch history, for example SQLite:
 
 ```sql
 CREATE TABLE completed_events (
-    event_id TEXT PRIMARY KEY,
-    completed_at INTEGER NOT NULL
+    agent_id     TEXT NOT NULL,
+    event_id     TEXT NOT NULL,
+    completed_at INTEGER NOT NULL,
+    PRIMARY KEY (agent_id, event_id)
 );
 ```
+
+(v0.1, ADR-0005) The key is the composite `(agent_id, event_id)`, not the
+event id alone: redelivery is per-agent (one consumer per agent), and a
+reused event_id from a buggy sender must not silently skip *other* agents'
+events. The dispatcher's in-flight set (10.3) uses the same key.
 
 On receiving an Event:
 
@@ -1123,7 +1130,7 @@ Recommended dedup retention exceeds the Stream `MaxAge`, or at least covers comm
 
 The dedup store only records completed `event_id`s. There is a second duplication path that requires no crash: while a Handler runs, the machine suspends or the network partitions for longer than `AckWait`; `in-progress` acks cannot reach the server, and on recovery JetStream redelivers the still-in-flight message — while the original Handler may not have exited yet.
 
-Handling (ADR-0001): `agentd` keeps an in-memory set of in-flight `event_id`s; when a copy of an event that is still in-flight arrives, the local copy is dropped without acking. The server redelivers after `AckWait`; by then the first dispatch has completed, the completed-store dedup hits, and `agentd` acks. The cost is one extra `AckWait`-scale delay on that path; on machine crash the in-flight set is lost and behavior degrades to the known duplicate window of 10.4.
+Handling (ADR-0001): `agentd` keeps an in-memory set of in-flight `(agent_id, event_id)` pairs (keying per ADR-0005); when a copy of an event that is still in-flight arrives, the local copy is dropped without acking. The server redelivers after `AckWait`; by then the first dispatch has completed, the completed-store dedup hits, and `agentd` acks. The cost is one extra `AckWait`-scale delay on that path; on machine crash the in-flight set is lost and behavior degrades to the known duplicate window of 10.4.
 
 ## 10.4 Acceptable duplicate window
 

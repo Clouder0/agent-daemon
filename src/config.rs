@@ -101,6 +101,21 @@ impl DaemonConfig {
             base.join("agentd").join("agents.d")
         })
     }
+
+    /// The dedup store path, honoring `$XDG_DATA_HOME` when unset
+    /// (whitepaper §10.2). A corrupt or unopenable store is a startup
+    /// error, not silently discarded history.
+    pub fn resolved_dedup_path(&self) -> std::path::PathBuf {
+        self.dedup_path.clone().unwrap_or_else(|| {
+            let base = dirs::data_dir().unwrap_or_default();
+            base.join("agentd").join("dedup.db")
+        })
+    }
+
+    /// The dedup TTL as a `Duration` (from `dedup_ttl_days`).
+    pub fn dedup_ttl(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.dedup_ttl_days * 24 * 3600)
+    }
 }
 
 #[cfg(test)]
@@ -169,5 +184,33 @@ mod tests {
         let raw = "ack_wait_secs = 60";
         let c: DaemonConfig = toml::from_str(raw).unwrap();
         assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn dedup_path_resolves_explicit_or_xdg_default() {
+        let explicit = DaemonConfig {
+            dedup_path: Some(std::path::PathBuf::from("/var/lib/agentd/dedup.db")),
+            ..DaemonConfig::default()
+        };
+        assert_eq!(
+            explicit.resolved_dedup_path(),
+            std::path::PathBuf::from("/var/lib/agentd/dedup.db")
+        );
+
+        let unset = DaemonConfig::default();
+        let resolved = unset.resolved_dedup_path();
+        assert!(
+            resolved.ends_with("agentd/dedup.db"),
+            "expected an agentd/dedup.db suffix, got {resolved:?}"
+        );
+    }
+
+    #[test]
+    fn dedup_ttl_derives_from_days() {
+        let c = DaemonConfig::default();
+        assert_eq!(
+            c.dedup_ttl(),
+            std::time::Duration::from_secs(14 * 24 * 3600)
+        );
     }
 }

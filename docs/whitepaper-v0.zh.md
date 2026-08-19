@@ -1086,10 +1086,14 @@ JetStream 为 Stream 和 Consumer 维护递增 Sequence。Consumer Metadata 还�
 
 ```sql
 CREATE TABLE completed_events (
-    event_id TEXT PRIMARY KEY,
-    completed_at INTEGER NOT NULL
+    agent_id     TEXT NOT NULL,
+    event_id     TEXT NOT NULL,
+    completed_at INTEGER NOT NULL,
+    PRIMARY KEY (agent_id, event_id)
 );
 ```
+
+（v0.1，ADR-0005）主键为复合键 `(agent_id, event_id)` 而非单独的 event_id：重投递是按 Agent 进行的（每个 Agent 一个 Consumer），发送方复用 event_id 时不得静默跳过*其他* Agent 的事件。Dispatcher 的 in-flight 集合（10.3）使用相同的键。
 
 收到 Event 时：
 
@@ -1114,7 +1118,7 @@ INSERT completed_events
 
 Dedup Store 只记录已完成的 `event_id`。还存在一条不依赖崩溃的重复路径：Handler 运行期间机器 Suspend 或网络分区超过 `AckWait`，`in-progress` 无法到达服务端，恢复后 JetStream 会重投递仍在途的消息，而原 Handler 可能尚未退出。
 
-处理方式（ADR-0001）：`agentd` 维护内存中的 in-flight `event_id` 集合；收到仍在 in-flight 的事件副本时，丢弃本地副本且不 Ack。服务端会在 `AckWait` 后再次投递，届时首个 Dispatch 已完成，completed 去重命中并 Ack。代价是该路径多一次 `AckWait` 级别的延迟；机器崩溃时 in-flight 集合随进程丢失，行为退化为 10.4 节的已知重复窗口。
+处理方式（ADR-0001，键控见 ADR-0005）：`agentd` 维护内存中的 in-flight `(agent_id, event_id)` 对；收到仍在 in-flight 的事件副本时，丢弃本地副本且不 Ack。服务端会在 `AckWait` 后再次投递，届时首个 Dispatch 已完成，completed 去重命中并 Ack。代价是该路径多一次 `AckWait` 级别的延迟；机器崩溃时 in-flight 集合随进程丢失，行为退化为 10.4 节的已知重复窗口。
 
 ---
 

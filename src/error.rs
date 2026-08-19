@@ -10,6 +10,9 @@ pub enum AgentdError {
 
     #[error("configuration error: {0}")]
     Config(String),
+
+    #[error("dedup store error: {0}")]
+    DedupStore(String),
 }
 
 impl AgentdError {
@@ -23,6 +26,10 @@ impl AgentdError {
 
     pub(crate) fn config(reason: String) -> Self {
         Self::Config(reason)
+    }
+
+    pub(crate) fn dedup_store(reason: String) -> Self {
+        Self::DedupStore(reason)
     }
 }
 
