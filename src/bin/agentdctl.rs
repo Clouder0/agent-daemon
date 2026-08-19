@@ -245,9 +245,12 @@ async fn socket(cli: &Cli) -> PathBuf {
 }
 
 async fn rpc(socket: &Path, request: &Request) -> Result<Response, String> {
-    let stream = UnixStream::connect(socket)
-        .await
-        .map_err(|e| format!("cannot connect to control socket {}: {e}", socket.display()))?;
+    let stream = UnixStream::connect(socket).await.map_err(|e| {
+        format!(
+            "is agentd running? cannot connect to control socket {}: {e}",
+            socket.display()
+        )
+    })?;
     let (reader, mut writer) = stream.into_split();
     let mut line = serde_json::to_string(request).map_err(|e| e.to_string())?;
     line.push('\n');
@@ -276,10 +279,7 @@ async fn rpc_ok(cli: &Cli, request: Request) -> ExitCode {
             ExitCode::SUCCESS
         }
         Ok(r) => fail(r.error.as_deref().unwrap_or("unknown error")),
-        Err(e) => {
-            eprintln!("agentdctl: is agentd running? {e}");
-            ExitCode::FAILURE
-        }
+        Err(e) => fail(e),
     }
 }
 

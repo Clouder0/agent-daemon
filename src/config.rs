@@ -84,6 +84,13 @@ impl DaemonConfig {
         if self.max_event_bytes == 0 {
             return Err(AgentdError::config("max_event_bytes must be > 0".into()));
         }
+        if self.max_event_bytes > i32::MAX as u64 {
+            // JetStream stream max_message_size is i32; reject instead of
+            // silently truncating in `ensure_stream`.
+            return Err(AgentdError::config(
+                "max_event_bytes exceeds the JetStream limit (i32::MAX)".into(),
+            ));
+        }
         if self.ack_progress_interval_secs >= self.ack_wait_secs {
             return Err(AgentdError::config(
                 "ack_progress_interval_secs must be < ack_wait_secs".into(),

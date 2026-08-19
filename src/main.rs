@@ -159,15 +159,13 @@ async fn run(config_path: Option<PathBuf>) -> ExitCode {
                     tracing::error!("reload failed; keeping previous registry: {e}");
                 }
             }
-            _ = sigterm.recv() => {
-                tracing::info!("SIGTERM: draining in-flight handlers (§14.3)");
-                relay.shutdown().await;
-                let _ = std::fs::remove_file(&socket_path);
-                tracing::info!("agentd stopped");
-                return ExitCode::SUCCESS;
-            }
-            _ = tokio::signal::ctrl_c() => {
-                tracing::info!("Ctrl-C: draining in-flight handlers (§14.3)");
+            signal = async {
+                tokio::select! {
+                    _ = sigterm.recv() => "SIGTERM",
+                    _ = tokio::signal::ctrl_c() => "Ctrl-C",
+                }
+            } => {
+                tracing::info!("{signal}: draining in-flight handlers (§14.3)");
                 relay.shutdown().await;
                 let _ = std::fs::remove_file(&socket_path);
                 tracing::info!("agentd stopped");
