@@ -27,6 +27,9 @@ agentdctl register --id my_agent --handler ~/agents/my-agent/on-event
 # 3. Someone publishes to your subject; your handler runs.
 ```
 
+(If agentd is not installed on this machine yet, see the
+[ops guide](ops-guide.md#install) — `cargo install agent-daemon`.)
+
 Your subject is `agent.events.my_agent`. A minimal valid event:
 
 ```json

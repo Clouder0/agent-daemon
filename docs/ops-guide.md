@@ -8,8 +8,15 @@ specification of record.
 
 ## Install
 
-Release tarballs (`agentd` + `agentdctl`, static musl where available) from
-GitHub Releases, or from source:
+From crates.io (easiest):
+
+```bash
+cargo install agent-daemon
+```
+
+Prebuilt binaries (`agentd` + `agentdctl`, static musl and gnu, x86_64 and
+aarch64) from [GitHub Releases](https://github.com/Clouder0/agent-daemon/releases),
+with `SHA256SUMS`. Or from a checkout of the source:
 
 ```bash
 cargo install --git https://github.com/Clouder0/agent-daemon
