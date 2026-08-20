@@ -21,11 +21,17 @@ Agent Runtime                        ← understands the event, decides what to 
 
 `agentd` is deliberately mechanism-only: no LLM clients, no agent loop, no context management, no retries, no sender verification. Everything agent-specific lives in a handler executable each agent registers. An `agent_id` (underscore-separated, e.g. `coding_main`) is a routing name decoupled from process liveness — which is what makes agent sleep, migration, and self-replacement (a new generation updating its own handler binding) first-class.
 
-**Status:** v0.1 feature-complete; building in public. The v0 specification is [`docs/whitepaper-v0.md`](docs/whitepaper-v0.md).
+[![crates.io](https://img.shields.io/crates/v/agent-daemon.svg)](https://crates.io/crates/agent-daemon)
+[![CI](https://github.com/Clouder0/agent-daemon/actions/workflows/ci.yml/badge.svg)](https://github.com/Clouder0/agent-daemon/actions/workflows/ci.yml)
+
+**Status:** v0.1.0 released ([crates.io](https://crates.io/crates/agent-daemon), [GitHub Releases](https://github.com/Clouder0/agent-daemon/releases)); development continues in public. The v0 specification is [`docs/whitepaper-v0.md`](docs/whitepaper-v0.md).
 
 ## Quickstart
 
 ```bash
+# Install (or grab a prebuilt binary from GitHub Releases):
+cargo install agent-daemon
+
 # Relay (once per domain): a NATS server with JetStream, then the stream:
 agentdctl init
 
